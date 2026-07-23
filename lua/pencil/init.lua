@@ -2,7 +2,7 @@ local M, api = {}, vim.api
 local version = vim.version()
 if version.major == 0 and version.minor < 10 then error("pencil.nvim requires Neovim 0.10 or newer") end
 
-local defaults = { mode = "detect", fallback = "soft", textwidth = 80,
+local defaults = { mode = "detect", fallback = "soft", textwidth = 80, autoformat = true,
   conceal = { level = 2, cursor = "" }, mappings = { navigation = true, undo_breaks = true },
   status = { hard = "H", auto = "A", soft = "S", off = "" } }
 local presets = {
@@ -54,8 +54,9 @@ local function validate(value)
       else local seen = {}; for mode in x.cursor:gmatch(".") do if seen[mode] then errors[#errors + 1] = name .. ".cursor must not contain duplicate modes" end; seen[mode] = true end end
     end
   end
-  known(value, { mode=true, fallback=true, textwidth=true, conceal=true, mappings=true, status=true, filetypes=true }, "configuration")
+  known(value, { mode=true, fallback=true, textwidth=true, autoformat=true, conceal=true, mappings=true, status=true, filetypes=true }, "configuration")
   mode(value.mode, "mode"); fallback(value.fallback, "fallback"); width(value.textwidth, "textwidth")
+  if value.autoformat ~= nil and type(value.autoformat) ~= "boolean" then errors[#errors + 1] = "autoformat must be a boolean" end
   mappings(value.mappings, "mappings"); conceal(value.conceal, "conceal")
   if value.status ~= nil then
     if type(value.status) ~= "table" then errors[#errors + 1] = "status must be a table" else
@@ -74,8 +75,8 @@ local function validate(value)
       for i = 1, max do if value.filetypes[i] == nil then errors[#errors + 1] = "filetypes list must not be sparse" elseif type(value.filetypes[i]) ~= "string" then errors[#errors + 1] = "filetypes list entries must be strings" end end
       for name, entry in pairs(value.filetypes) do if type(name) == "string" then
         if type(entry) ~= "table" then errors[#errors + 1] = "filetypes." .. name .. " must be a table" else
-          known(entry, { mode=true, fallback=true, textwidth=true, conceal=true, mappings=true }, "filetypes." .. name)
-          mode(entry.mode, "filetypes." .. name .. ".mode"); fallback(entry.fallback, "filetypes." .. name .. ".fallback"); width(entry.textwidth, "filetypes." .. name .. ".textwidth"); mappings(entry.mappings, "filetypes." .. name .. ".mappings"); conceal(entry.conceal, "filetypes." .. name .. ".conceal")
+          known(entry, { mode=true, fallback=true, textwidth=true, autoformat=true, conceal=true, mappings=true }, "filetypes." .. name)
+          mode(entry.mode, "filetypes." .. name .. ".mode"); fallback(entry.fallback, "filetypes." .. name .. ".fallback"); width(entry.textwidth, "filetypes." .. name .. ".textwidth"); if entry.autoformat ~= nil and type(entry.autoformat) ~= "boolean" then errors[#errors + 1] = "filetypes." .. name .. ".autoformat must be a boolean" end; mappings(entry.mappings, "filetypes." .. name .. ".mappings"); conceal(entry.conceal, "filetypes." .. name .. ".conceal")
         end
       end end
     end
@@ -144,7 +145,7 @@ end
 local function validate_enable(opts)
   if type(opts) ~= "table" then error("enable() expects a table") end
   local errors = {}
-  for key in pairs(opts) do if not ({ buf=true, mode=true, textwidth=true, conceal=true, mappings=true })[key] then errors[#errors + 1] = "enable has unknown key " .. tostring(key) end end
+  for key in pairs(opts) do if not ({ buf=true, mode=true, textwidth=true, autoformat=true, conceal=true, mappings=true })[key] then errors[#errors + 1] = "enable has unknown key " .. tostring(key) end end
   if opts.mappings ~= nil then
     if type(opts.mappings) ~= "table" then errors[#errors + 1] = "enable.mappings must be a table" else
       for key in pairs(opts.mappings) do if key ~= "navigation" and key ~= "undo_breaks" then errors[#errors + 1] = "enable.mappings has unknown key " .. tostring(key) end end
@@ -152,6 +153,7 @@ local function validate_enable(opts)
     end
   end
   if opts.mode and opts.mode ~= "hard" and opts.mode ~= "soft" and opts.mode ~= "detect" then errors[#errors + 1] = "enable.mode must be hard, soft, or detect" end
+  if opts.autoformat ~= nil and type(opts.autoformat) ~= "boolean" then errors[#errors + 1] = "enable.autoformat must be a boolean" end
   if opts.textwidth ~= nil then integer(opts.textwidth, "enable.textwidth", errors, 1) end
   if opts.buf ~= nil and (type(opts.buf) ~= "number" or opts.buf % 1 ~= 0) then errors[#errors + 1] = "enable.buf must be an integer" end
   if opts.conceal ~= nil and opts.conceal ~= false then
@@ -216,16 +218,56 @@ local function restore_window(state, win, force)
   state.windows[win], state.displayed[win] = nil, nil
   if window_owner[win] == state then window_owner[win] = nil end
 end
+local function eligible_filetype(state)
+  local ft = vim.bo[state.buf].filetype
+  return ft == "text" or ft == "gitcommit" or ft == "mail"
+end
+local function formatoptions_owned(state)
+  local format = state.format
+  if not format or format.external then return false end
+  if vim.bo[state.buf].formatoptions ~= format.last then format.external = true; return false end
+  return true
+end
+local function formatoptions_value(baseline, insert)
+  local value, seen = "", {}
+  for flag in baseline:gmatch(".") do
+    if flag ~= "a" then value = value .. flag; seen[flag] = true end
+  end
+  if not seen.t then value = value .. "t" end
+  if not seen.n then value = value .. "n" end
+  if insert then value = value .. "a" end
+  return value
+end
+local function formatoptions_write(state, value)
+  local format = state.format
+  format.guard = true
+  vim.bo[state.buf].formatoptions = value
+  format.guard = false
+  format.last = value
+end
+local function reconcile_formatoptions(state)
+  local format = state.format
+  if state.mode == "hard" and not format then
+    format = { baseline = vim.bo[state.buf].formatoptions }
+    format.last = format.baseline
+    state.format = format
+  end
+  if not format or not formatoptions_owned(state) then return end
+  if state.mode ~= "hard" or not state.autoformat then
+    if state.mode ~= "hard" then formatoptions_write(state, format.baseline)
+    else formatoptions_write(state, formatoptions_value(format.baseline, false)) end
+    return
+  end
+  local insert = state.in_insert or vim.api.nvim_get_mode().mode:sub(1, 1) == "i"
+  insert = insert and eligible_filetype(state) and not state.suspended and not state.pending_suspend
+  formatoptions_write(state, formatoptions_value(format.baseline, insert))
+end
 local function reconcile_buffer(state, mode, width)
   local buf = state.buf
   local desired = { textwidth = mode == "hard" and width or nil, formatoptions = nil }
-  local current = vim.bo[buf].formatoptions
-  if mode == "hard" then
-    desired.formatoptions = current
-    for flag in ("tcq"):gmatch(".") do if not desired.formatoptions:find(flag, 1, true) then desired.formatoptions = desired.formatoptions .. flag end end
-  end
   state.owned = state.owned or {}
-  for _, key in ipairs({ "textwidth", "formatoptions" }) do
+  reconcile_formatoptions(state)
+  for _, key in ipairs({ "textwidth" }) do
     local record = state.owned[key]
     if record and record.user then
       -- Do not reacquire an option the user changed during this activation.
@@ -319,6 +361,7 @@ local function cleanup(state, force)
     state.mappings, state.mapping_warnings = {}, {}
   end
   if api.nvim_buf_is_valid(state.buf) then
+    if state.format and not state.format.external and formatoptions_owned(state) then vim.bo[state.buf].formatoptions = state.format.baseline end
     for key, record in pairs(state.owned or {}) do if not record.user and vim.bo[state.buf][key] == record.ours then vim.bo[state.buf][key] = record.old end end
   end
   for win in pairs(state.windows) do restore_window(state, win, force) end
@@ -341,6 +384,8 @@ function M.enable(opts)
   state.displayed = state.displayed or {}
   state.buf = buf
   state.mode, state.width, state.settings = mode, width, settings
+  if opts.autoformat ~= nil then state.autoformat = opts.autoformat else state.autoformat = settings.autoformat end
+  if previous then state.suspended, state.pending_suspend = nil, nil end
   local conceal = opts.conceal ~= nil and opts.conceal or settings.conceal
   state.conceal = (conceal ~= false and (supported or opts.conceal ~= nil)) and conceal or nil
   if state.conceal then state.conceal = merge({ level=2, cursor="" }, state.conceal) end
@@ -356,18 +401,86 @@ function M.disable(opts)
 end
 function M.toggle(opts) local buf = target(opts); if active[buf] then M.disable({buf=buf}) else M.enable(opts or {buf=buf}) end end
 function M.mode(opts) local buf=target(opts); return active[buf] and active[buf].mode or (disabled[buf] and "off" or nil) end
-function M.status(opts) local state=active[target(opts)]; return state and (state.settings.status[state.mode] or "") or "" end
+local function semantic_status(state)
+  if state.mode == "soft" then return "soft" end
+  if state.mode == "hard" and state.autoformat and eligible_filetype(state) and not state.suspended and not state.pending_suspend and formatoptions_owned(state) then return "auto" end
+  return "hard"
+end
+function M.status(opts)
+  local buf = target(opts)
+  local state = active[buf]
+  if not state then return config.status.off or "" end
+  return state.settings.status[semantic_status(state)] or ""
+end
+local function validate_autoformat_action_opts(opts)
+  if opts == nil then return {} end
+  if type(opts) ~= "table" then error("set_autoformat options must be a table") end
+  for key in pairs(opts) do if key ~= "buf" then error("set_autoformat has unknown key " .. tostring(key)) end end
+  return opts
+end
+function M.set_autoformat(action, opts)
+  if action ~= "enable" and action ~= "disable" and action ~= "toggle" and action ~= "suspend" then error("invalid autoformat action " .. tostring(action)) end
+  opts = validate_autoformat_action_opts(opts); local buf = target(opts); local state = active[buf]
+  if not state or state.mode ~= "hard" then
+    if action == "enable" or action == "toggle" then
+      vim.notify("Pencil format " .. action .. " requires hard mode", vim.log.levels.WARN)
+    end
+    return
+  end
+  formatoptions_owned(state)
+  if action == "suspend" then
+    if not state.autoformat then return end
+    if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then state.suspended = true else state.pending_suspend = true end
+  elseif action == "disable" then state.autoformat, state.suspended, state.pending_suspend = false, nil, nil
+  elseif action == "enable" then state.autoformat, state.suspended, state.pending_suspend = true, nil, nil
+  elseif action == "toggle" then state.autoformat = not state.autoformat; if state.autoformat then state.suspended, state.pending_suspend = nil, nil end end
+  reconcile_formatoptions(state)
+end
 
+local function format_command_completion(_, line)
+  if line:match("^%s*Pencil%s+format%s+") then return {"enable", "disable", "toggle", "suspend"} end
+  if line:match("^%s*Pencil%s+format") then return {"format"} end
+  return {"enable", "disable", "toggle", "hard", "soft", "detect"}
+end
 local function command(args)
-  local action=args.fargs[1]; if not action then return M.enable() end
-  local actions={enable=M.enable, disable=M.disable, toggle=M.toggle, hard=function() M.enable({mode="hard"}) end, soft=function() M.enable({mode="soft"}) end, detect=function() M.enable({mode="detect"}) end}
-  if not actions[action] then error("Pencil: unknown action: " .. action) end; actions[action]()
+  local action = args.fargs[1]
+  if not action then return M.enable() end
+  local actions = { enable=M.enable, disable=M.disable, toggle=M.toggle,
+    hard=function() M.enable({mode="hard"}) end, soft=function() M.enable({mode="soft"}) end,
+    detect=function() M.enable({mode="detect"}) end }
+  if action == "format" then
+    if #args.fargs ~= 2 or not ({enable=true, disable=true, toggle=true, suspend=true})[args.fargs[2]] then
+      error("Pencil: format expects exactly one action: enable, disable, toggle, or suspend")
+    end
+    return M.set_autoformat(args.fargs[2])
+  end
+  if #args.fargs ~= 1 or not actions[action] then error("Pencil: expected exactly one valid action") end
+  actions[action]()
 end
 function M._setup_autocmds()
   if installed then return end; installed=true; local group=api.nvim_create_augroup("Pencil", {clear=true})
-  api.nvim_create_user_command("Pencil", command, {nargs="?", complete=function() return {"enable","disable","toggle","hard","soft","detect"} end})
-  for name, action in pairs({HardPencil="hard",SoftPencil="soft",NoPencil="disable",PencilOff="disable",TogglePencil="toggle",PencilToggle="toggle"}) do api.nvim_create_user_command(name,function() command({fargs={action}}) end,{}) end
-  api.nvim_create_autocmd("FileType",{group=group,callback=function(a) if configured and settings_for(a.buf) then pcall(M.enable,{buf=a.buf}) end end})
+  api.nvim_create_user_command("Pencil", command, {nargs="*", complete=format_command_completion})
+  for name, action in pairs({HardPencil="hard",SoftPencil="soft",NoPencil="disable",PencilOff="disable",PencilToggle="toggle",TogglePencil="toggle"}) do api.nvim_create_user_command(name,function() command({fargs={action}}) end,{}) end
+  for name, action in pairs({PFormat="enable", PFormatOff="disable", PFormatToggle="toggle"}) do api.nvim_create_user_command(name,function() M.set_autoformat(action) end,{}) end
+  api.nvim_create_autocmd("FileType",{group=group,callback=function(a)
+    if not configured then return end
+    if active[a.buf] then reconcile_buffer(active[a.buf], active[a.buf].mode, active[a.buf].width)
+    elseif settings_for(a.buf) then pcall(M.enable,{buf=a.buf}) end
+  end})
+  api.nvim_create_autocmd({"InsertEnter", "InsertLeave", "ModeChanged"},{group=group,callback=function(a)
+    local state=active[a.buf]
+    if state then
+      local insert = a.event == "InsertEnter" or (a.event == "ModeChanged" and vim.api.nvim_get_mode().mode:sub(1,1)=="i")
+      state.in_insert = insert
+      if insert and state.pending_suspend and eligible_filetype(state) then
+        state.pending_suspend=nil; state.suspended=true
+      elseif not insert then
+        state.suspended=nil
+      end
+      reconcile_formatoptions(state)
+    end
+  end})
+  api.nvim_create_autocmd("OptionSet",{group=group,pattern="formatoptions",callback=function(a) local state=active[a.buf]; if state and state.format and not state.format.guard then state.format.external=true end end})
   local pending, scheduled = {}, false
   local function reconcile()
     scheduled = false
