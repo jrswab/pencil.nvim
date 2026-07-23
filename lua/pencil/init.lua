@@ -3,7 +3,7 @@ local version = vim.version()
 if version.major == 0 and version.minor < 10 then error("pencil.nvim requires Neovim 0.10 or newer") end
 
 local defaults = { mode = "detect", fallback = "soft", textwidth = 80,
-  conceal = { level = 2, cursor = "" },
+  conceal = { level = 2, cursor = "" }, mappings = { navigation = true, undo_breaks = true },
   status = { hard = "H", auto = "A", soft = "S", off = "" } }
 local presets = {
   gitcommit = { mode = "hard", textwidth = 72 }, mail = { mode = "hard", textwidth = 72 },
@@ -31,6 +31,12 @@ local function validate(value)
   local function mode(x, name) if x ~= nil and x ~= "hard" and x ~= "soft" and x ~= "detect" then errors[#errors + 1] = name .. " must be hard, soft, or detect" end end
   local function fallback(x, name) if x ~= nil and x ~= "hard" and x ~= "soft" then errors[#errors + 1] = name .. " must be hard or soft" end end
   local function width(x, name) if x ~= nil then integer(x, name, errors, 1) end end
+  local function mappings(x, name)
+    if x == nil then return end
+    if type(x) ~= "table" then errors[#errors + 1] = name .. " must be a table"; return end
+    known(x, { navigation=true, undo_breaks=true }, name)
+    for _, key in ipairs({ "navigation", "undo_breaks" }) do if x[key] ~= nil and type(x[key]) ~= "boolean" then errors[#errors + 1] = name .. "." .. key .. " must be a boolean" end end
+  end
   local function conceal(x, name)
     if x == nil or x == false then return end
     if type(x) ~= "table" then errors[#errors + 1] = name .. " must be false or a table"; return end
@@ -41,9 +47,9 @@ local function validate(value)
       else local seen = {}; for mode in x.cursor:gmatch(".") do if seen[mode] then errors[#errors + 1] = name .. ".cursor must not contain duplicate modes" end; seen[mode] = true end end
     end
   end
-  known(value, { mode=true, fallback=true, textwidth=true, conceal=true, status=true, filetypes=true }, "configuration")
+  known(value, { mode=true, fallback=true, textwidth=true, conceal=true, mappings=true, status=true, filetypes=true }, "configuration")
   mode(value.mode, "mode"); fallback(value.fallback, "fallback"); width(value.textwidth, "textwidth")
-  conceal(value.conceal, "conceal")
+  mappings(value.mappings, "mappings"); conceal(value.conceal, "conceal")
   if value.status ~= nil then
     if type(value.status) ~= "table" then errors[#errors + 1] = "status must be a table" else
       known(value.status, { hard=true, auto=true, soft=true, off=true }, "status")
@@ -61,8 +67,8 @@ local function validate(value)
       for i = 1, max do if value.filetypes[i] == nil then errors[#errors + 1] = "filetypes list must not be sparse" elseif type(value.filetypes[i]) ~= "string" then errors[#errors + 1] = "filetypes list entries must be strings" end end
       for name, entry in pairs(value.filetypes) do if type(name) == "string" then
         if type(entry) ~= "table" then errors[#errors + 1] = "filetypes." .. name .. " must be a table" else
-          known(entry, { mode=true, fallback=true, textwidth=true, conceal=true }, "filetypes." .. name)
-          mode(entry.mode, "filetypes." .. name .. ".mode"); fallback(entry.fallback, "filetypes." .. name .. ".fallback"); width(entry.textwidth, "filetypes." .. name .. ".textwidth"); conceal(entry.conceal, "filetypes." .. name .. ".conceal")
+          known(entry, { mode=true, fallback=true, textwidth=true, conceal=true, mappings=true }, "filetypes." .. name)
+          mode(entry.mode, "filetypes." .. name .. ".mode"); fallback(entry.fallback, "filetypes." .. name .. ".fallback"); width(entry.textwidth, "filetypes." .. name .. ".textwidth"); mappings(entry.mappings, "filetypes." .. name .. ".mappings"); conceal(entry.conceal, "filetypes." .. name .. ".conceal")
         end
       end end
     end
@@ -131,7 +137,13 @@ end
 local function validate_enable(opts)
   if type(opts) ~= "table" then error("enable() expects a table") end
   local errors = {}
-  for key in pairs(opts) do if not ({ buf=true, mode=true, textwidth=true, conceal=true })[key] then errors[#errors + 1] = "enable has unknown key " .. tostring(key) end end
+  for key in pairs(opts) do if not ({ buf=true, mode=true, textwidth=true, conceal=true, mappings=true })[key] then errors[#errors + 1] = "enable has unknown key " .. tostring(key) end end
+  if opts.mappings ~= nil then
+    if type(opts.mappings) ~= "table" then errors[#errors + 1] = "enable.mappings must be a table" else
+      for key in pairs(opts.mappings) do if key ~= "navigation" and key ~= "undo_breaks" then errors[#errors + 1] = "enable.mappings has unknown key " .. tostring(key) end end
+      for _, key in ipairs({ "navigation", "undo_breaks" }) do if opts.mappings[key] ~= nil and type(opts.mappings[key]) ~= "boolean" then errors[#errors + 1] = "enable.mappings." .. key .. " must be a boolean" end end
+    end
+  end
   if opts.mode and opts.mode ~= "hard" and opts.mode ~= "soft" and opts.mode ~= "detect" then errors[#errors + 1] = "enable.mode must be hard, soft, or detect" end
   if opts.textwidth ~= nil then integer(opts.textwidth, "enable.textwidth", errors, 1) end
   if opts.buf ~= nil and (type(opts.buf) ~= "number" or opts.buf % 1 ~= 0) then errors[#errors + 1] = "enable.buf must be an integer" end
@@ -221,7 +233,68 @@ local function reconcile_buffer(state, mode, width)
     end
   end
 end
+local navigation_specs = {
+  { mode="n", lhs="j", rhs="gj" }, { mode="n", lhs="k", rhs="gk" },
+  { mode="n", lhs="<Down>", rhs="gj" }, { mode="n", lhs="<Up>", rhs="gk" },
+  { mode="n", lhs="0", rhs="g0" }, { mode="n", lhs="$", rhs="g$" },
+  { mode="n", lhs="<Home>", rhs="g0" }, { mode="n", lhs="<End>", rhs="g$" },
+}
+local undo_specs = {}
+for _, lhs in ipairs({ ".", "!", "?", ",", ";", ":", "<CR>" }) do
+  undo_specs[#undo_specs + 1] = { mode="i", lhs=lhs, rhs=lhs .. "<C-G>u" }
+end
+for _, lhs in ipairs({ "<C-U>", "<C-W>" }) do
+  undo_specs[#undo_specs + 1] = { mode="i", lhs=lhs, rhs="<C-G>u" .. lhs }
+end
+local function mapping_list(state)
+  local specs = {}
+  if state.settings.mappings.navigation then for _, spec in ipairs(navigation_specs) do specs[#specs + 1] = spec end end
+  if state.settings.mappings.undo_breaks then for _, spec in ipairs(undo_specs) do specs[#specs + 1] = spec end end
+  return specs
+end
+local function find_mapping(buf, mode, lhs)
+  for _, map in ipairs(api.nvim_buf_get_keymap(buf, mode)) do if map.lhs == lhs then return map end end
+  for _, map in ipairs(api.nvim_get_keymap(mode)) do if map.lhs == lhs then return map end end
+end
+local function mapping_matches(buf, record)
+  local map = find_mapping(buf, record.mode, record.lhs)
+  return map and map.rhs == record.rhs and map.buffer == buf
+end
+local function warn_mapping_conflict(state, lhs)
+  state.mapping_warnings = state.mapping_warnings or {}
+  if state.mapping_warnings[lhs] then return end
+  state.mapping_warnings[lhs] = true
+  vim.notify("Pencil skipped conflicting mapping " .. lhs .. " in buffer " .. state.buf, vim.log.levels.WARN)
+end
+local function reconcile_mappings(state)
+  state.mappings, state.mapping_warnings = state.mappings or {}, state.mapping_warnings or {}
+  local wanted = {}
+  for _, spec in ipairs(mapping_list(state)) do
+    local id = spec.mode .. "\0" .. spec.lhs
+    wanted[id] = spec
+    local record = state.mappings[id]
+    if record and not mapping_matches(state.buf, record) then state.mappings[id] = nil; record = nil end
+    if not record then
+      if find_mapping(state.buf, spec.mode, spec.lhs) then warn_mapping_conflict(state, spec.lhs)
+      else
+        api.nvim_buf_set_keymap(state.buf, spec.mode, spec.lhs, spec.rhs, { noremap=true, silent=true })
+        state.mappings[id] = { mode=spec.mode, lhs=spec.lhs, rhs=spec.rhs }
+        state.mapping_warnings[spec.lhs] = nil
+      end
+    end
+  end
+  for id, record in pairs(state.mappings) do
+    if not wanted[id] then
+      if mapping_matches(state.buf, record) then api.nvim_buf_del_keymap(state.buf, record.mode, record.lhs) end
+      state.mappings[id] = nil
+    end
+  end
+end
 local function cleanup(state, force)
+  if api.nvim_buf_is_valid(state.buf) then
+    for _, record in pairs(state.mappings or {}) do if mapping_matches(state.buf, record) then api.nvim_buf_del_keymap(state.buf, record.mode, record.lhs) end end
+    state.mappings, state.mapping_warnings = {}, {}
+  end
   if api.nvim_buf_is_valid(state.buf) then
     for key, record in pairs(state.owned or {}) do if not record.user and vim.bo[state.buf][key] == record.ours then vim.bo[state.buf][key] = record.old end end
   end
@@ -249,6 +322,7 @@ function M.enable(opts)
   state.conceal = (conceal ~= false and (supported or opts.conceal ~= nil)) and conceal or nil
   if state.conceal then state.conceal = merge({ level=2, cursor="" }, state.conceal) end
   reconcile_buffer(state, mode, width)
+  reconcile_mappings(state)
   for _, win in ipairs(api.nvim_list_wins()) do if api.nvim_win_get_buf(win) == buf then apply_window(state, win, not previous or not state.windows[win]); state.displayed[win] = buf; window_owner[win] = state end end
   active[buf], disabled[buf] = state, nil
 end

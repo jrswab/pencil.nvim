@@ -139,6 +139,26 @@ pencil.disable({ buf = reconfigured }); check(vim.wo.conceallevel == 0 and vim.w
 pencil.setup({}); local edited = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = edited, mode = "soft" }); vim.wo.wrap = false
 vim.cmd("doautocmd BufEnter"); vim.wait(20); check(vim.wo.wrap == false, "reconciliation must not overwrite user window edits"); pencil.disable({ buf = edited }); check(vim.wo.wrap == false, "user window edit remains after disable"); reset(edited)
 
+-- Mapping groups install independently and restore safely.
+pencil.setup({ filetypes = {}, mappings = { navigation = true, undo_breaks = false } })
+local mapped = fresh({ "wrapped prose" }, "text")
+pencil.enable({ buf = mapped, mode = "soft" })
+local function has_map(buf, mode, lhs)
+  for _, map in ipairs(api.nvim_buf_get_keymap(buf, mode)) do if map.lhs == lhs then return true end end
+  return false
+end
+check(has_map(mapped, "n", "j") and not has_map(mapped, "i", "."), "mapping groups are independent")
+pencil.disable({ buf = mapped }); check(not has_map(mapped, "n", "j"), "owned navigation mapping teardown")
+pencil.setup({ filetypes = {}, mappings = { navigation = false, undo_breaks = true } })
+pencil.enable({ buf = mapped, mode = "soft" })
+check(not has_map(mapped, "n", "j") and has_map(mapped, "i", "."), "undo mapping group configuration")
+pencil.disable({ buf = mapped }); reset(mapped)
+local conflict = fresh({ "text" }, "text")
+api.nvim_buf_set_keymap(conflict, "n", "j", "echo", {})
+pencil.setup({ filetypes = {} }); pencil.enable({ buf = conflict, mode = "soft" })
+check(has_map(conflict, "n", "j") and has_map(conflict, "n", "k"), "conflicting mapping does not abort installation")
+pencil.disable({ buf = conflict }); check(has_map(conflict, "n", "j"), "conflicting mapping survives teardown"); reset(conflict)
+
 -- Commands, aliases, and completion expose the same observable state as Lua.
 pencil.setup({})
 buf = fresh({ "short" }, "text"); vim.cmd("Pencil hard"); check(pencil.mode({buf=buf}) == "hard", "command mode"); vim.cmd("PencilOff"); check(pencil.mode({buf=buf}) == "off", "alias mode"); vim.cmd("PencilToggle"); check(pencil.mode({buf=buf}) ~= "off", "toggle alias"); reset(buf)
