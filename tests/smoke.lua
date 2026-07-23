@@ -393,5 +393,37 @@ local switched = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable(
 vim.cmd("vnew"); local switched_win = api.nvim_get_current_win(); local other = api.nvim_create_buf(true, false); api.nvim_set_current_buf(other); vim.cmd("buffer " .. switched); vim.wait(10)
 check(vim.wo[switched_win].wrap == true, "buffer switch must restore actual window"); pencil.disable({ buf = switched }); reset(switched); api.nvim_buf_delete(other, { force = true })
 
+-- FileType reconciles an active buffer even when this module was never configured.
+do
+  package.loaded["pencil"] = nil
+  local unconfigured = require("pencil")
+  local manual = fresh({ "short" }, "text")
+  unconfigured.enable({ buf = manual, mode = "hard", textwidth = 70 })
+  vim.cmd("doautocmd InsertEnter")
+  check(vim.bo[manual].formatoptions:find("a", 1, true) ~= nil, "manual activation enters Insert")
+  vim.bo[manual].filetype = "markdown"
+  vim.cmd("doautocmd FileType")
+  check(vim.bo[manual].formatoptions:find("a", 1, true) == nil, "FileType reconciles manual activation")
+  unconfigured.disable({ buf = manual }); reset(manual)
+end
+
+-- Insert state is per buffer: a non-current buffer is not treated as inserting.
+pencil.setup({})
+local insert_owner = fresh({ "short" }, "text")
+pencil.enable({ buf = insert_owner, mode = "hard", textwidth = 70 })
+vim.cmd("doautocmd InsertEnter")
+local pending_buf = api.nvim_create_buf(true, false)
+api.nvim_buf_set_lines(pending_buf, 0, -1, false, { "short" })
+vim.bo[pending_buf].filetype = "text"
+pencil.enable({ buf = pending_buf, mode = "hard", textwidth = 70 })
+check(vim.bo[pending_buf].formatoptions:find("a", 1, true) == nil, "non-current buffer does not inherit Insert state")
+pencil.set_autoformat("suspend", { buf = pending_buf })
+api.nvim_set_current_buf(pending_buf)
+vim.cmd("doautocmd InsertEnter")
+check(vim.bo[pending_buf].formatoptions:find("a", 1, true) == nil, "non-current suspension remains pending until its Insert")
+vim.cmd("doautocmd InsertLeave")
+pencil.disable({ buf = insert_owner }); reset(insert_owner)
+pencil.disable({ buf = pending_buf }); api.nvim_buf_delete(pending_buf, { force = true })
+
 print("pencil smoke tests passed")
 vim.cmd("qa!")

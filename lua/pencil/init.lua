@@ -258,7 +258,7 @@ local function reconcile_formatoptions(state)
     else formatoptions_write(state, formatoptions_value(format.baseline, false)) end
     return
   end
-  local insert = state.in_insert or vim.api.nvim_get_mode().mode:sub(1, 1) == "i"
+  local insert = state.in_insert == true
   insert = insert and eligible_filetype(state) and not state.suspended and not state.pending_suspend
   formatoptions_write(state, formatoptions_value(format.baseline, insert))
 end
@@ -430,7 +430,7 @@ function M.set_autoformat(action, opts)
   formatoptions_owned(state)
   if action == "suspend" then
     if not state.autoformat then return end
-    if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then state.suspended = true else state.pending_suspend = true end
+    if state.in_insert then state.suspended = true else state.pending_suspend = true end
   elseif action == "disable" then state.autoformat, state.suspended, state.pending_suspend = false, nil, nil
   elseif action == "enable" then state.autoformat, state.suspended, state.pending_suspend = true, nil, nil
   elseif action == "toggle" then state.autoformat = not state.autoformat; if state.autoformat then state.suspended, state.pending_suspend = nil, nil end end
@@ -463,14 +463,15 @@ function M._setup_autocmds()
   for name, action in pairs({HardPencil="hard",SoftPencil="soft",NoPencil="disable",PencilOff="disable",PencilToggle="toggle",TogglePencil="toggle"}) do api.nvim_create_user_command(name,function() command({fargs={action}}) end,{}) end
   for name, action in pairs({PFormat="enable", PFormatOff="disable", PFormatToggle="toggle"}) do api.nvim_create_user_command(name,function() M.set_autoformat(action) end,{}) end
   api.nvim_create_autocmd("FileType",{group=group,callback=function(a)
-    if not configured then return end
-    if active[a.buf] then reconcile_buffer(active[a.buf], active[a.buf].mode, active[a.buf].width)
-    elseif settings_for(a.buf) then pcall(M.enable,{buf=a.buf}) end
+    if active[a.buf] then
+      reconcile_buffer(active[a.buf], active[a.buf].mode, active[a.buf].width)
+    elseif configured and settings_for(a.buf) then pcall(M.enable,{buf=a.buf}) end
   end})
   api.nvim_create_autocmd({"InsertEnter", "InsertLeave", "ModeChanged"},{group=group,callback=function(a)
     local state=active[a.buf]
     if state then
-      local insert = a.event == "InsertEnter" or (a.event == "ModeChanged" and vim.api.nvim_get_mode().mode:sub(1,1)=="i")
+      local insert = a.event == "InsertEnter"
+      if a.event == "ModeChanged" then insert = a.match:match(":i$") ~= nil end
       state.in_insert = insert
       if insert and state.pending_suspend and eligible_filetype(state) then
         state.pending_suspend=nil; state.suspended=true
