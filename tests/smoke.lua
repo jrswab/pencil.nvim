@@ -157,56 +157,69 @@ local conflict = fresh({ "text" }, "text")
 api.nvim_buf_set_keymap(conflict, "n", "j", "echo", {})
 pencil.setup({ filetypes = {} }); pencil.enable({ buf = conflict, mode = "soft" })
 check(has_map(conflict, "n", "j") and has_map(conflict, "n", "k"), "conflicting mapping does not abort installation")
+-- An existing Insert mapping remains untouched when Pencil cannot own it.
+api.nvim_buf_set_keymap(conflict, "i", "<CR>", "<Esc>", {})
+pencil.enable({ buf = conflict, mode = "soft" })
+local conflict_cr = get_map(conflict, "i", "<CR>")
+check(conflict_cr and conflict_cr.rhs == "<Esc>", "conflicting CR survives")
 pencil.disable({ buf = conflict }); check(has_map(conflict, "n", "j"), "conflicting mapping survives teardown"); reset(conflict)
 
 -- Navigation uses display lines while explicit g alternatives retain physical movement.
 pencil.setup({ filetypes = {}, mappings = { navigation = true, undo_breaks = false } })
-local wrapped = fresh({ string.rep("x", 40), "short" }, "text")
+local wrapped = fresh({ string.rep("x", 200), "short" }, "text")
 vim.wo.wrap, vim.wo.linebreak = true, false
 vim.bo[wrapped].textwidth = 0
-vim.cmd("resize 20")
+vim.o.columns = 30
 pencil.enable({ buf = wrapped, mode = "soft" })
 local function feed(keys) api.nvim_feedkeys(api.nvim_replace_termcodes(keys, true, false, true), "xt", false) end
 api.nvim_win_set_cursor(0, { 1, 0 }); feed("j")
 local display_cursor = api.nvim_win_get_cursor(0)
 api.nvim_win_set_cursor(0, { 1, 0 }); feed("gj")
 local physical_cursor = api.nvim_win_get_cursor(0)
--- Neovim headless windows may clamp display width; retain the observable check
--- through the installed commands while still exercising both keys on wrapped text.
-check(display_cursor[1] == physical_cursor[1], "wrapped navigation executes")
+check(display_cursor[2] > physical_cursor[2], "j and gj diverge on wrapped text")
+api.nvim_win_set_cursor(0, { 1, 0 }); feed("$")
+local display_end = api.nvim_win_get_cursor(0)
+api.nvim_win_set_cursor(0, { 1, 0 }); feed("g$")
+local physical_end = api.nvim_win_get_cursor(0)
+check(display_end[2] < physical_end[2], "$ and g$ diverge on wrapped text")
 for _, pair in ipairs({ { "j", "gj" }, { "k", "gk" }, { "0", "g0" }, { "$", "g$" }, { "<Down>", "gj" }, { "<Up>", "gk" }, { "<Home>", "g0" }, { "<End>", "g$" } }) do
   local simple, physical = get_map(wrapped, "n", pair[1]), get_map(wrapped, "n", pair[2])
-  check(simple and simple.rhs == pair[2], "display mapping " .. pair[1])
-  check(physical and physical.rhs == ({ gj="j", gk="k", g0="0", ["g$"]="$" })[pair[2]], "physical mapping " .. pair[2])
+  check(simple and simple.callback, "display mapping " .. pair[1])
+  check(physical and physical.callback, "physical mapping " .. pair[2])
 end
 pencil.disable({ buf = wrapped }); reset(wrapped)
 
--- Same-RHS replacements with changed metadata are external and survive teardown.
+-- Recreating a mapping with copied public metadata is external and survives teardown.
 pencil.setup({ filetypes = {}, mappings = { navigation = true, undo_breaks = false } })
 local replacement = fresh({ "short" }, "text")
 pencil.enable({ buf = replacement, mode = "soft" })
 api.nvim_buf_del_keymap(replacement, "n", "j")
-api.nvim_buf_set_keymap(replacement, "n", "j", "gj", { noremap = true, silent = true, desc = "external replacement" })
+api.nvim_buf_set_keymap(replacement, "n", "j", "gj", { noremap = true, silent = true, desc = "pencil.nvim:owned-mapping:v1" })
 pencil.disable({ buf = replacement })
 local external = get_map(replacement, "n", "j")
-check(external and external.rhs == "gj" and external.desc == "external replacement", "same-RHS replacement survives")
+check(external and external.rhs == "gj" and external.desc == "pencil.nvim:owned-mapping:v1", "copied metadata replacement survives")
 api.nvim_buf_del_keymap(replacement, "n", "j"); reset(replacement)
 
--- Undo-break mappings preserve their editing keys; CR is conditional on availability.
+-- Undo-break mappings preserve editing keys and actual undo behavior.
+local saved_deletions = {}
+for _, lhs in ipairs({ "<CR>", "<C-U>", "<C-W>" }) do
+  for _, map in ipairs(api.nvim_get_keymap("i")) do if map.lhs == lhs then saved_deletions[lhs] = map; api.nvim_del_keymap("i", lhs) end end
+end
 pencil.setup({ filetypes = {}, mappings = { navigation = false, undo_breaks = true } })
 local undo_buf = fresh({ "" }, "text")
 pencil.enable({ buf = undo_buf, mode = "soft" })
-for _, lhs in ipairs({ ".", "!", "?", ",", ";", ":" }) do
-  local map = get_map(undo_buf, "i", lhs)
-  check(map and map.rhs == lhs .. "<C-G>u", "undo punctuation " .. lhs)
+for _, lhs in ipairs({ ".", "!", "?", ",", ";", ":", "<CR>", "<C-U>", "<C-W>" }) do
+  check(get_map(undo_buf, "i", lhs) ~= nil, "undo mapping " .. lhs)
 end
-for _, lhs in ipairs({ "<C-U>", "<C-W>" }) do
-  local map = get_map(undo_buf, "i", lhs)
-  if map then check(map.rhs == "<C-G>u" .. lhs, "undo deletion " .. lhs) end
-end
-local cr = get_map(undo_buf, "i", "<CR>")
-if cr then check(cr.rhs == "<CR><C-G>u", "safe CR undo mapping") end
+local undo_map = get_map(undo_buf, "i", ".")
+check(undo_map.callback, "punctuation uses private callback")
+api.nvim_win_set_cursor(0, { 1, 0 }); feed("ihello."); feed(" world"); feed("<Esc>")
+vim.cmd("undo")
+check(api.nvim_buf_get_lines(undo_buf, 0, -1, false)[1] == "hello.", "punctuation creates undo boundary")
 pencil.disable({ buf = undo_buf }); reset(undo_buf)
+for lhs, map in pairs(saved_deletions) do
+  api.nvim_set_keymap("i", lhs, map.rhs or "", { noremap = map.noremap == 1, silent = map.silent == 1, expr = map.expr == 1, desc = map.desc })
+end
 
 -- Commands, aliases, and completion expose the same observable state as Lua.
 pencil.setup({})

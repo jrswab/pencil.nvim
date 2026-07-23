@@ -14,6 +14,10 @@ local config, user_config, configured = vim.deepcopy(defaults), {}, false
 local active, disabled, installed = {}, {}, false
 local window_owner, transition_baseline, pending_leave = {}, {}, {}
 local mapping_owner = "pencil.nvim:owned-mapping:v1"
+local function mapping_callback(rhs)
+  local keys = vim.api.nvim_replace_termcodes(rhs, true, false, true)
+  return function() vim.api.nvim_feedkeys(keys, "n", false) end
+end
 
 local function merge(a, b)
   local out = vim.deepcopy(a)
@@ -261,17 +265,12 @@ local function find_mapping(buf, mode, lhs)
 end
 local function mapping_identity(spec)
   return { mode = spec.mode, lhs = spec.lhs, rhs = spec.rhs, buffer = true,
-    desc = mapping_owner, noremap = true, silent = true, expr = false, nowait = false,
-    script = false, replace_keycodes = false }
+    callback = mapping_callback(spec.rhs), desc = mapping_owner, noremap = true, silent = true,
+    expr = false, nowait = false, script = false, replace_keycodes = false }
 end
 local function mapping_matches(buf, record)
   local map = find_mapping(buf, record.mode, record.lhs)
-  if not map or map.buffer ~= buf or map.desc ~= mapping_owner then return false end
-  for _, key in ipairs({ "rhs", "noremap", "silent", "expr", "nowait", "script", "replace_keycodes" }) do
-    local actual = map[key]
-    if type(record[key]) == "boolean" then actual = actual == 1 or actual == true end
-    if actual ~= record[key] then return false end
-  end
+  if not map or map.buffer ~= buf or map.callback ~= record.callback then return false end
   return true
 end
 local function warn_mapping_conflict(state, lhs)
@@ -292,8 +291,8 @@ local function reconcile_mappings(state)
       if find_mapping(state.buf, spec.mode, spec.lhs) then warn_mapping_conflict(state, spec.lhs)
       else
         local identity = mapping_identity(spec)
-        api.nvim_buf_set_keymap(state.buf, spec.mode, spec.lhs, spec.rhs, {
-          noremap = identity.noremap, silent = identity.silent, desc = identity.desc,
+        vim.keymap.set(spec.mode, spec.lhs, identity.callback, {
+          buffer = state.buf, noremap = identity.noremap, silent = identity.silent, desc = identity.desc,
         })
         state.mappings[id] = identity
         state.mapping_warnings[spec.lhs] = nil
