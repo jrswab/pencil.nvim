@@ -12,6 +12,7 @@ local presets = {
   asciidoc = { mode = "detect", fallback = "hard", textwidth = 79 }, textile = { mode = "detect", fallback = "soft" }, }
 local config, user_config, configured = vim.deepcopy(defaults), {}, false
 local active, disabled, installed = {}, {}, false
+local window_owner = {}
 
 local function merge(a, b)
   local out = vim.deepcopy(a)
@@ -123,7 +124,7 @@ local function detect(buf, settings)
   if ml and ml > 0 then return "hard", ml elseif ml == 0 then return "soft" end
   local seen = 0
   for first = 0, api.nvim_buf_line_count(buf) - 1, 100 do for _, line in ipairs(api.nvim_buf_get_lines(buf, first, math.min(first + 100, api.nvim_buf_line_count(buf)), false)) do
-    if vim.trim(line) ~= "" then seen = seen + 1; if vim.fn.strdisplaywidth(line) > 130 then return "soft" end; if seen == 20 then return settings.fallback end end
+    if vim.trim(line) ~= "" then seen = seen + 1; if api.nvim_buf_call(buf, function() return vim.fn.strdisplaywidth(line) end) > 130 then return "soft" end; if seen == 20 then return settings.fallback end end
   end end
   return settings.fallback
 end
@@ -150,7 +151,10 @@ local function capture(state, win)
   if api.nvim_win_is_valid(win) and not state.windows[win] then state.windows[win] = { wrap=vim.wo[win].wrap, linebreak=vim.wo[win].linebreak, breakindent=vim.wo[win].breakindent, conceallevel=vim.wo[win].conceallevel, concealcursor=vim.wo[win].concealcursor } end
 end
 local function apply_window(state, win)
-  if not api.nvim_win_is_valid(win) then return end; capture(state, win)
+  if not api.nvim_win_is_valid(win) then return end
+  local fresh = not state.windows[win]
+  capture(state, win)
+  if not fresh then return end
   vim.wo[win].wrap, vim.wo[win].linebreak, vim.wo[win].breakindent = state.mode == "soft", state.mode == "soft", state.mode == "soft"
   if state.conceal then vim.wo[win].conceallevel, vim.wo[win].concealcursor = state.conceal.level, state.conceal.cursor end
 end
@@ -160,9 +164,11 @@ local function restore_window(state, win, force)
   for key, option in pairs({ level = "conceallevel", cursor = "concealcursor" }) do
     if state.owned[option] ~= nil and (force or vim.wo[win][option] == state.owned[option]) then vim.wo[win][option] = old[option] end
   end
-  -- deliberate: keep one baseline per window for the active buffer; dropping it on
-  -- leave would capture Pencil's presentation again if reconciliation is delayed.
   state.displayed[win] = nil
+  state.released = state.released or {}
+  state.released[win] = old
+  state.windows[win] = nil
+  if window_owner[win] == state then window_owner[win] = nil end
 end
 local function cleanup(state, force)
   if api.nvim_buf_is_valid(state.buf) then
@@ -171,9 +177,13 @@ local function cleanup(state, force)
     for flag in state.owned_flags:gmatch(".") do if not state.old.formatoptions:find(flag, 1, true) and formatoptions:find(flag, 1, true) then formatoptions = formatoptions:gsub(flag, "") end end
     vim.bo[state.buf].formatoptions = formatoptions
   end
-  for win in pairs(state.windows) do
-    restore_window(state, win, force)
-    state.windows[win] = nil
+  for win in pairs(state.windows) do restore_window(state, win, force) end
+  for win, old in pairs(state.released or {}) do
+    if api.nvim_win_is_valid(win) then
+      for _, key in ipairs({ "wrap", "linebreak", "breakindent" }) do if force or vim.wo[win][key] == state.owned[key] then vim.wo[win][key] = old[key] end end
+      for key, option in pairs({ level = "conceallevel", cursor = "concealcursor" }) do if state.owned[option] ~= nil and (force or vim.wo[win][option] == state.owned[option]) then vim.wo[win][option] = old[option] end end
+    end
+    if window_owner[win] == state then window_owner[win] = nil end
   end
 end
 function M.setup(value)
@@ -210,7 +220,7 @@ function M.enable(opts)
   state.owned.wrap, state.owned.linebreak, state.owned.breakindent = mode == "soft", mode == "soft", mode == "soft"
   if state.conceal then state.conceal = merge({ level=2, cursor="" }, state.conceal) end
   state.owned.conceallevel, state.owned.concealcursor = state.conceal and state.conceal.level or nil, state.conceal and state.conceal.cursor or nil
-  for _, win in ipairs(api.nvim_list_wins()) do if api.nvim_win_get_buf(win) == buf then apply_window(state, win); state.displayed[win] = buf end end
+  for _, win in ipairs(api.nvim_list_wins()) do if api.nvim_win_get_buf(win) == buf then apply_window(state, win); state.displayed[win] = buf; window_owner[win] = state end end
   active[buf], disabled[buf] = state, nil
 end
 function M.disable(opts)
@@ -232,39 +242,41 @@ function M._setup_autocmds()
   api.nvim_create_user_command("Pencil", command, {nargs="?", complete=function() return {"enable","disable","toggle","hard","soft","detect"} end})
   for name, action in pairs({HardPencil="hard",SoftPencil="soft",NoPencil="disable",PencilOff="disable",TogglePencil="toggle",PencilToggle="toggle"}) do api.nvim_create_user_command(name,function() command({fargs={action}}) end,{}) end
   api.nvim_create_autocmd("FileType",{group=group,callback=function(a) if configured and settings_for(a.buf) then pcall(M.enable,{buf=a.buf}) end end})
-  local reconcile
-  reconcile = function()
-    local valid = {}
-    for _, win in ipairs(api.nvim_list_wins()) do
-      valid[win] = true
-      local buf = api.nvim_win_get_buf(win)
-      for _, state in pairs(active) do
-        if state.displayed[win] and state.displayed[win] ~= buf then restore_window(state, win) end
+  local pending, scheduled = {}, false
+  local function reconcile()
+    scheduled = false
+    for win in pairs(pending) do
+      pending[win] = nil
+      local old = window_owner[win]
+      if old then
+        local current = api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) or nil
+        if current ~= old.buf then restore_window(old, win) end
       end
-      local state = active[buf]
-      if state then apply_window(state, win); state.displayed[win] = buf end
-    end
-    for _, state in pairs(active) do
-      for win in pairs(state.windows) do
-        if not valid[win] then restore_window(state, win) end
+      if api.nvim_win_is_valid(win) then
+        local state = active[api.nvim_win_get_buf(win)]
+        if state then apply_window(state, win); state.displayed[win] = state.buf; window_owner[win] = state end
       end
     end
   end
-  api.nvim_create_autocmd({"BufWinEnter", "BufWinLeave", "BufEnter", "BufLeave", "WinEnter", "WinClosed"},{group=group,callback=function() vim.schedule(reconcile) end})
+  local function queue(win)
+    win = win or api.nvim_get_current_win()
+    pending[win] = true
+    if not scheduled then scheduled = true; vim.schedule(reconcile) end
+  end
+  api.nvim_create_autocmd({"BufWinEnter", "BufWinLeave", "BufEnter", "BufLeave", "WinEnter", "WinClosed"},{group=group,callback=function(a)
+    local win = a.win or api.nvim_get_current_win()
+    local owner = window_owner[win]
+    if owner and (a.event == "BufLeave" or a.event == "BufWinLeave") and owner.buf == a.buf then restore_window(owner, win) end
+    queue(win)
+  end})
   api.nvim_create_autocmd("BufWipeout",{group=group,callback=function(a)
     local state = active[a.buf]
-    if not state or state.pending_cleanup then return end
-    -- deliberate: BufWipeout can reinitialize window options before this callback;
-    -- retain the state until the scheduled forced restoration has run.
-    state.pending_cleanup = true
-    vim.schedule(function()
-      vim.schedule(function()
-        if active[a.buf] ~= state then return end
-        cleanup(state, true)
-        active[a.buf], disabled[a.buf] = nil, nil
-        vim.schedule(reconcile)
-      end)
-    end)
+    if state then
+      active[a.buf], disabled[a.buf] = nil, nil
+      vim.schedule(function() cleanup(state, true) end)
+    end
+    disabled[a.buf] = nil
+    for win, owner in pairs(window_owner) do if owner == state then window_owner[win] = nil end end
   end})
 end
 M._setup_autocmds()

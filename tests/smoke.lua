@@ -51,6 +51,12 @@ for _, bad in ipairs({ "vim: set tw=-1:", "vim: set textwidth=wat:", "vim: set t
   reset(b)
 end
 
+-- Display width uses the target buffer context, including tabstop, and honors the boundary.
+pencil.setup({ fallback = "hard", textwidth = 42 })
+local exact = fresh({ string.rep("x", 130) }, "unknown"); pencil.enable({ buf = exact }); check(pencil.mode({ buf = exact }) == "hard", "130 columns stay hard"); reset(exact)
+local unicode = fresh({ string.rep("界", 66) }, "unknown"); pencil.enable({ buf = unicode }); check(pencil.mode({ buf = unicode }) == "soft", "Unicode display width"); reset(unicode)
+local tabs = fresh({ "\t" .. string.rep("x", 8) }, "unknown"); vim.bo[tabs].tabstop = 4; pencil.enable({ buf = tabs }); check(pencil.mode({ buf = tabs }) == "hard", "target buffer tabstop context"); reset(tabs)
+
 -- Sampling stops at 20 non-blank lines and does not read the whole buffer.
 pencil.setup({ fallback = "hard", textwidth = 42 })
 local sampled = {}
@@ -126,6 +132,10 @@ pencil.enable({ buf = reconfigured, conceal = { level = 1, cursor = "n" } }); pe
 check(vim.wo.conceallevel == 0 and vim.wo.concealcursor == "", "reconfiguration removes owned conceal changes")
 pencil.disable({ buf = reconfigured }); check(vim.wo.conceallevel == 0 and vim.wo.concealcursor == "", "reconfiguration final restoration"); reset(reconfigured)
 
+-- User window edits survive scheduled reconciliation while Pencil remains active.
+pencil.setup({}); local edited = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = edited, mode = "soft" }); vim.wo.wrap = false
+vim.cmd("doautocmd BufEnter"); vim.wait(20); check(vim.wo.wrap == false, "reconciliation must not overwrite user window edits"); pencil.disable({ buf = edited }); check(vim.wo.wrap == false, "user window edit remains after disable"); reset(edited)
+
 -- Commands, aliases, and completion expose the same observable state as Lua.
 pencil.setup({})
 buf = fresh({ "short" }, "text"); vim.cmd("Pencil hard"); check(pencil.mode({buf=buf}) == "hard", "command mode"); vim.cmd("PencilOff"); check(pencil.mode({buf=buf}) == "off", "alias mode"); vim.cmd("PencilToggle"); check(pencil.mode({buf=buf}) ~= "off", "toggle alias"); reset(buf)
@@ -156,6 +166,9 @@ for _, win in ipairs({ left, right }) do
   end
 end
 pencil.disable({ buf=multi }); check(vim.wo[left].wrap == left_baseline and vim.wo[right].wrap == right_baseline, "disable restores original baselines"); reset(multi)
+-- Disabled buffers are removed on wipeout even when inactive.
+pencil.setup({ filetypes = {} }); local stale = fresh({ "short" }, "text"); pencil.disable({ buf = stale }); api.nvim_buf_delete(stale, { force = true }); vim.wait(20); check(pcall(pencil.mode, { buf = stale }) == false, "wiped disabled buffer is not retained")
+
 -- Wiping the displayed buffer must restore every window option Pencil owns.
 pencil.setup({ conceal = { level = 2, cursor = "n" }, filetypes = {} })
 local wiped = fresh({ "short" }, "text")
