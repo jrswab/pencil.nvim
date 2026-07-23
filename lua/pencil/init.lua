@@ -13,11 +13,13 @@ local presets = {
 local config, user_config, configured = vim.deepcopy(defaults), {}, false
 local active, disabled, installed = {}, {}, false
 local window_owner, transition_baseline, pending_leave = {}, {}, {}
-local mapping_owner = "pencil.nvim:owned-mapping:v1"
-local function mapping_callback(rhs)
-  local keys = vim.api.nvim_replace_termcodes(rhs, true, false, true)
-  return function() vim.api.nvim_feedkeys(keys, "n", false) end
+local function ownership_token()
+  local file = io.open("/dev/urandom", "rb")
+  local entropy = file and file:read(32) or tostring(vim.loop.hrtime())
+  if file then file:close() end
+  return vim.fn.sha256(entropy .. tostring({})):sub(1, 32)
 end
+local mapping_owner = "pencil.nvim:owned-mapping:v1:" .. ownership_token()
 
 local function merge(a, b)
   local out = vim.deepcopy(a)
@@ -264,14 +266,18 @@ local function find_mapping(buf, mode, lhs)
   for _, map in ipairs(api.nvim_get_keymap(mode)) do if map.lhs == lhs then return map end end
 end
 local function mapping_identity(spec)
-  return { mode = spec.mode, lhs = spec.lhs, rhs = spec.rhs, buffer = true,
-    callback = mapping_callback(spec.rhs), desc = mapping_owner, noremap = true, silent = true,
-    expr = false, nowait = false, script = false, replace_keycodes = false }
+  return { mode = spec.mode, lhs = spec.lhs, rhs = spec.rhs, buffer = nil,
+    desc = mapping_owner, noremap = true, silent = true, expr = false,
+    nowait = false, script = false, callback = false, replace_keycodes = false }
 end
 local function mapping_matches(buf, record)
   local map = find_mapping(buf, record.mode, record.lhs)
-  if not map or map.buffer ~= buf or map.callback ~= record.callback then return false end
-  return true
+  if not map or map.buffer ~= buf then return false end
+  for _, field in ipairs({ "rhs", "desc", "noremap", "silent", "expr", "nowait", "script", "replace_keycodes" }) do
+    local expected = record[field]
+    if map[field] ~= nil and map[field] ~= (type(expected) == "boolean" and (expected and 1 or 0) or expected) then return false end
+  end
+  return (map.callback ~= nil) == record.callback
 end
 local function warn_mapping_conflict(state, lhs)
   state.mapping_warnings = state.mapping_warnings or {}
@@ -291,9 +297,10 @@ local function reconcile_mappings(state)
       if find_mapping(state.buf, spec.mode, spec.lhs) then warn_mapping_conflict(state, spec.lhs)
       else
         local identity = mapping_identity(spec)
-        vim.keymap.set(spec.mode, spec.lhs, identity.callback, {
+        vim.keymap.set(spec.mode, spec.lhs, identity.rhs, {
           buffer = state.buf, noremap = identity.noremap, silent = identity.silent, desc = identity.desc,
         })
+        identity.buffer = state.buf
         state.mappings[id] = identity
         state.mapping_warnings[spec.lhs] = nil
       end

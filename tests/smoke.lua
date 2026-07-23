@@ -184,21 +184,36 @@ local physical_end = api.nvim_win_get_cursor(0)
 check(display_end[2] < physical_end[2], "$ and g$ diverge on wrapped text")
 for _, pair in ipairs({ { "j", "gj" }, { "k", "gk" }, { "0", "g0" }, { "$", "g$" }, { "<Down>", "gj" }, { "<Up>", "gk" }, { "<Home>", "g0" }, { "<End>", "g$" } }) do
   local simple, physical = get_map(wrapped, "n", pair[1]), get_map(wrapped, "n", pair[2])
-  check(simple and simple.callback, "display mapping " .. pair[1])
-  check(physical and physical.callback, "physical mapping " .. pair[2])
+  check(simple and simple.rhs == (pair[1] == "j" and "gj" or pair[1] == "k" and "gk" or pair[1] == "$" and "g$" or pair[1] == "0" and "g0" or pair[1] == "<Down>" and "gj" or pair[1] == "<Up>" and "gk" or pair[1] == "<Home>" and "g0" or "g$"), "display mapping " .. pair[1])
+  check(physical and physical.rhs ~= nil, "physical mapping " .. pair[2])
 end
+-- Counts remain native mapping semantics rather than being consumed by a callback.
+api.nvim_buf_set_lines(wrapped, 0, -1, false, { "one", "two", "three", "four" })
+api.nvim_win_set_cursor(0, { 1, 0 }); feed("2j")
+check(api.nvim_win_get_cursor(0)[1] == 3, "counted navigation")
 pencil.disable({ buf = wrapped }); reset(wrapped)
 
 -- Recreating a mapping with copied public metadata is external and survives teardown.
 pencil.setup({ filetypes = {}, mappings = { navigation = true, undo_breaks = false } })
 local replacement = fresh({ "short" }, "text")
 pencil.enable({ buf = replacement, mode = "soft" })
+local owned_desc = get_map(replacement, "n", "j").desc
 api.nvim_buf_del_keymap(replacement, "n", "j")
-api.nvim_buf_set_keymap(replacement, "n", "j", "gj", { noremap = true, silent = true, desc = "pencil.nvim:owned-mapping:v1" })
+api.nvim_buf_set_keymap(replacement, "n", "j", "gj", { noremap = true, silent = false, desc = owned_desc })
 pencil.disable({ buf = replacement })
 local external = get_map(replacement, "n", "j")
-check(external and external.rhs == "gj" and external.desc == "pencil.nvim:owned-mapping:v1", "copied metadata replacement survives")
+check(external and external.rhs == "gj" and external.desc == owned_desc and external.silent == 0, "copied token with changed option survives")
 api.nvim_buf_del_keymap(replacement, "n", "j"); reset(replacement)
+
+-- A copied ownership token with changed description is also external.
+local changed_desc = fresh({ "short" }, "text")
+pencil.enable({ buf = changed_desc, mode = "soft" })
+local original = get_map(changed_desc, "n", "j")
+api.nvim_buf_del_keymap(changed_desc, "n", "j")
+api.nvim_buf_set_keymap(changed_desc, "n", "j", "gj", { noremap = true, silent = true, desc = "external replacement" })
+pencil.disable({ buf = changed_desc })
+check(get_map(changed_desc, "n", "j").desc == "external replacement", "changed description survives")
+reset(changed_desc)
 
 -- Undo-break mappings preserve editing keys and actual undo behavior.
 local saved_deletions = {}
@@ -212,8 +227,9 @@ for _, lhs in ipairs({ ".", "!", "?", ",", ";", ":", "<CR>", "<C-U>", "<C-W>" })
   check(get_map(undo_buf, "i", lhs) ~= nil, "undo mapping " .. lhs)
 end
 local undo_map = get_map(undo_buf, "i", ".")
-check(undo_map.callback, "punctuation uses private callback")
-api.nvim_win_set_cursor(0, { 1, 0 }); feed("ihello."); feed(" world"); feed("<Esc>")
+check(undo_map.callback == nil and undo_map.rhs == ".<C-G>u", "punctuation uses a native nonrecursive RHS")
+api.nvim_win_set_cursor(0, { 1, 0 }); feed("ihello. world<Esc>")
+check(api.nvim_buf_get_lines(undo_buf, 0, -1, false)[1] == "hello. world", "continuous insert typeahead")
 vim.cmd("undo")
 check(api.nvim_buf_get_lines(undo_buf, 0, -1, false)[1] == "hello.", "punctuation creates undo boundary")
 pencil.disable({ buf = undo_buf }); reset(undo_buf)
