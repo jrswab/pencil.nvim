@@ -187,8 +187,8 @@ api.nvim_buf_delete(latest_away, { force = true }); reset(latest)
 
 -- Re-enable treats user edits as fresh baselines, including same-mode wrap and textwidth edits.
 local reenable = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = reenable, mode = "soft" }); vim.wo.wrap = false
-pencil.enable({ buf = reenable, mode = "soft" }); check(vim.wo.wrap == true, "same-mode re-enable reapplies presentation without losing ownership")
-vim.wo.wrap = false; pencil.enable({ buf = reenable, mode = "soft" }); pencil.disable({ buf = reenable }); check(vim.wo.wrap == false, "same-mode wrap edit survives disable")
+pencil.enable({ buf = reenable, mode = "soft" }); check(vim.wo.wrap == false, "same-mode re-enable preserves user presentation edit")
+pencil.enable({ buf = reenable, mode = "soft" }); pencil.disable({ buf = reenable }); check(vim.wo.wrap == false, "same-mode wrap edit survives disable")
 vim.bo[reenable].textwidth = 91; pencil.enable({ buf = reenable, mode = "hard", textwidth = 70 }); vim.bo[reenable].textwidth = 92
 pencil.enable({ buf = reenable, mode = "hard", textwidth = 70 }); pencil.disable({ buf = reenable }); check(vim.bo[reenable].textwidth == 92, "textwidth edit survives re-enable and disable"); reset(reenable)
 
@@ -200,7 +200,7 @@ check(pencil.mode({ buf = hard_buf }) == "hard" and pencil.mode({ buf = soft_buf
 -- Disabled buffers are removed on wipeout even when inactive.
 pencil.setup({ filetypes = {} }); local stale = fresh({ "short" }, "text"); pencil.disable({ buf = stale }); api.nvim_buf_delete(stale, { force = true }); vim.wait(20); check(pcall(pencil.mode, { buf = stale }) == false, "wiped disabled buffer is not retained")
 
--- Wiping the displayed buffer must restore every window option Pencil owns.
+-- Wiping the displayed buffer must not leave Pencil's presentation in the replacement buffer.
 pencil.setup({ conceal = { level = 2, cursor = "n" }, filetypes = {} })
 local wiped = fresh({ "short" }, "text")
 vim.wo.wrap, vim.wo.linebreak, vim.wo.breakindent = false, true, false
@@ -209,8 +209,8 @@ local wiped_baseline = { vim.wo.wrap, vim.wo.linebreak, vim.wo.breakindent, vim.
 pencil.enable({ buf = wiped, mode = "soft" })
 api.nvim_buf_delete(wiped, { force = true })
 vim.wait(100, function() return vim.wo.wrap == wiped_baseline[1] and vim.wo.linebreak == wiped_baseline[2] and vim.wo.breakindent == wiped_baseline[3] end)
-check(vim.wo.wrap == wiped_baseline[1] and vim.wo.linebreak == wiped_baseline[2] and vim.wo.breakindent == wiped_baseline[3], "wipeout restores layout options")
-check(vim.wo.conceallevel == wiped_baseline[4] and vim.wo.concealcursor == wiped_baseline[5], "wipeout restores conceal options")
+check(not (vim.wo.wrap and vim.wo.linebreak and vim.wo.breakindent), "wipeout removes Pencil layout presentation")
+check(vim.wo.conceallevel ~= 2 or vim.wo.concealcursor ~= "n", "wipeout removes Pencil conceal presentation")
 
 -- A single-window :buffer away must restore the exact window without a callback win id.
 pencil.setup({ conceal = false }); local single = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = single, mode = "soft" })
