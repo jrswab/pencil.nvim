@@ -43,6 +43,8 @@ Pencil.nvim's safe core workflow already owns activation, mode selection, presen
 - [x] `lua/pencil/init.lua: M.enable(), M.disable(), M.toggle(), M.mode(), M.status(), command(), and M._setup_autocmds()` — preserve the meanings and aliases of all existing Lua controls and `:Pencil` actions while routing activation through the mapping lifecycle; keep successful mapping operations and routine reconciliation quiet except for specified conflict warnings. Do not add a public mapping command unless required by the existing configuration contract.
 - [x] `tests/smoke.lua: public workflow and integration assertions` — verify existing commands, aliases, modes, statuses, hard/soft/detect selection, and automatic activation remain unchanged with mappings enabled; run one end-to-end workflow combining navigation, undo breaks, conflicts, external mapping edits, repeated lifecycle transitions, multiple buffers, and multiple windows.
 - [x] `tests/smoke.lua: final headless acceptance run` — execute the complete real-Neovim smoke suite with the milestone-002 assertions and confirm no milestone-001 behavior regresses. Test deletion of the mapping implementation as a failure check where practical: each mapping assertion must fail if the corresponding production mapping behavior is removed.
+- [x] `lua/pencil/init.lua: mapping identity` — mark Pencil mappings with a unique description and compare behavior-defining mapping fields during teardown, preserving same-RHS external replacements with changed metadata.
+- [x] `tests/smoke.lua: blocking review regressions` — verify physical-line alternative mappings, wrapped navigation execution, external same-RHS replacement preservation, and environment-tolerant deletion/CR undo mapping coverage.
 
 ## Parallel Work
 

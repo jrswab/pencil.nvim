@@ -13,6 +13,7 @@ local presets = {
 local config, user_config, configured = vim.deepcopy(defaults), {}, false
 local active, disabled, installed = {}, {}, false
 local window_owner, transition_baseline, pending_leave = {}, {}, {}
+local mapping_owner = "pencil.nvim:owned-mapping:v1"
 
 local function merge(a, b)
   local out = vim.deepcopy(a)
@@ -238,6 +239,8 @@ local navigation_specs = {
   { mode="n", lhs="<Down>", rhs="gj" }, { mode="n", lhs="<Up>", rhs="gk" },
   { mode="n", lhs="0", rhs="g0" }, { mode="n", lhs="$", rhs="g$" },
   { mode="n", lhs="<Home>", rhs="g0" }, { mode="n", lhs="<End>", rhs="g$" },
+  { mode="n", lhs="gj", rhs="j" }, { mode="n", lhs="gk", rhs="k" },
+  { mode="n", lhs="g0", rhs="0" }, { mode="n", lhs="g$", rhs="$" },
 }
 local undo_specs = {}
 for _, lhs in ipairs({ ".", "!", "?", ",", ";", ":", "<CR>" }) do
@@ -256,9 +259,20 @@ local function find_mapping(buf, mode, lhs)
   for _, map in ipairs(api.nvim_buf_get_keymap(buf, mode)) do if map.lhs == lhs then return map end end
   for _, map in ipairs(api.nvim_get_keymap(mode)) do if map.lhs == lhs then return map end end
 end
+local function mapping_identity(spec)
+  return { mode = spec.mode, lhs = spec.lhs, rhs = spec.rhs, buffer = true,
+    desc = mapping_owner, noremap = true, silent = true, expr = false, nowait = false,
+    script = false, replace_keycodes = false }
+end
 local function mapping_matches(buf, record)
   local map = find_mapping(buf, record.mode, record.lhs)
-  return map and map.rhs == record.rhs and map.buffer == buf
+  if not map or map.buffer ~= buf or map.desc ~= mapping_owner then return false end
+  for _, key in ipairs({ "rhs", "noremap", "silent", "expr", "nowait", "script", "replace_keycodes" }) do
+    local actual = map[key]
+    if type(record[key]) == "boolean" then actual = actual == 1 or actual == true end
+    if actual ~= record[key] then return false end
+  end
+  return true
 end
 local function warn_mapping_conflict(state, lhs)
   state.mapping_warnings = state.mapping_warnings or {}
@@ -277,8 +291,11 @@ local function reconcile_mappings(state)
     if not record then
       if find_mapping(state.buf, spec.mode, spec.lhs) then warn_mapping_conflict(state, spec.lhs)
       else
-        api.nvim_buf_set_keymap(state.buf, spec.mode, spec.lhs, spec.rhs, { noremap=true, silent=true })
-        state.mappings[id] = { mode=spec.mode, lhs=spec.lhs, rhs=spec.rhs }
+        local identity = mapping_identity(spec)
+        api.nvim_buf_set_keymap(state.buf, spec.mode, spec.lhs, spec.rhs, {
+          noremap = identity.noremap, silent = identity.silent, desc = identity.desc,
+        })
+        state.mappings[id] = identity
         state.mapping_warnings[spec.lhs] = nil
       end
     end
