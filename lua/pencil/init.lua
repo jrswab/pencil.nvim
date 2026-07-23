@@ -153,6 +153,13 @@ end
 local function apply_window(state, win)
   if not api.nvim_win_is_valid(win) then return end
   local fresh = not state.windows[win]
+  if not fresh and state.mode == state.mode then
+    -- deliberate: a returned window's current values are its latest baseline.
+    local old = state.windows[win]
+    for _, key in ipairs({ "wrap", "linebreak", "breakindent" }) do
+      if vim.wo[win][key] ~= state.owned[key] then old[key] = vim.wo[win][key] end
+    end
+  end
   capture(state, win)
   if not fresh then return end
   vim.wo[win].wrap, vim.wo[win].linebreak, vim.wo[win].breakindent = state.mode == "soft", state.mode == "soft", state.mode == "soft"
@@ -178,12 +185,15 @@ local function cleanup(state, force)
     vim.bo[state.buf].formatoptions = formatoptions
   end
   for win in pairs(state.windows) do restore_window(state, win, force) end
+end
+local function restore_released_for_wipeout(state)
   for win, old in pairs(state.released or {}) do
     if api.nvim_win_is_valid(win) then
-      for _, key in ipairs({ "wrap", "linebreak", "breakindent" }) do if force or vim.wo[win][key] == state.owned[key] then vim.wo[win][key] = old[key] end end
-      for key, option in pairs({ level = "conceallevel", cursor = "concealcursor" }) do if state.owned[option] ~= nil and (force or vim.wo[win][option] == state.owned[option]) then vim.wo[win][option] = old[option] end end
+      for _, key in ipairs({ "wrap", "linebreak", "breakindent" }) do vim.wo[win][key] = old[key] end
+      for key, option in pairs({ level = "conceallevel", cursor = "concealcursor" }) do
+        if state.owned[option] ~= nil then vim.wo[win][option] = old[option] end
+      end
     end
-    if window_owner[win] == state then window_owner[win] = nil end
   end
 end
 function M.setup(value)
@@ -194,7 +204,12 @@ end
 function M.enable(opts)
   if opts == nil then opts = {} end; validate_enable(opts); local buf = target(opts)
   local previous = active[buf]
-  if previous then cleanup(previous) end
+  if previous then
+    cleanup(previous)
+    -- deliberate: re-enables use the post-cleanup values as a fresh ownership baseline.
+    previous.old.textwidth, previous.old.formatoptions = vim.bo[buf].textwidth, vim.bo[buf].formatoptions
+    previous.owned_flags = ""
+  end
   local settings, supported = settings_for(buf); settings = settings or merge({}, config)
   settings = merge(settings, opts)
   local ml, requested = modeline_width(buf), settings.mode
@@ -273,7 +288,10 @@ function M._setup_autocmds()
     local state = active[a.buf]
     if state then
       active[a.buf], disabled[a.buf] = nil, nil
-      vim.schedule(function() cleanup(state, true) end)
+      vim.schedule(function()
+        cleanup(state, true)
+        restore_released_for_wipeout(state)
+      end)
     end
     disabled[a.buf] = nil
     for win, owner in pairs(window_owner) do if owner == state then window_owner[win] = nil end end

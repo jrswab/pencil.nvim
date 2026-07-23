@@ -107,7 +107,10 @@ pencil.disable({ buf = precedence }); reset(precedence)
 -- Every built-in automatic preset is selectable, while an explicit empty set is not.
 for name in pairs({ gitcommit=true, mail=true, markdown=true, text=true, rst=true, tex=true, asciidoc=true, textile=true }) do
   pencil.setup({ filetypes = { name } })
-  local b = fresh({ "short" }, name); vim.cmd("doautocmd FileType"); check(pencil.mode({ buf=b }) ~= nil, "preset activation " .. name); reset(b)
+  local b = fresh({ "short" }, name); vim.cmd("doautocmd FileType")
+  local expected = ({ gitcommit={ mode="hard", width=72 }, mail={ mode="hard", width=72 }, markdown={ mode="soft" }, text={ mode="soft" }, rst={ mode="hard", width=79 }, tex={ mode="hard", width=79 }, asciidoc={ mode="hard", width=79 }, textile={ mode="soft" } })[name]
+  check(pencil.mode({ buf=b }) == expected.mode, "preset mode " .. name)
+  check(expected.width == nil or vim.bo[b].textwidth == expected.width, "preset width " .. name); reset(b)
 end
 pencil.setup({ filetypes = {} }); local empty = fresh({ "short" }, "markdown"); vim.cmd("doautocmd FileType"); check(pencil.mode({buf=empty}) == nil, "empty filetypes disables auto activation"); reset(empty)
 pencil.setup({ mode = "detect", textwidth = 61, fallback = "soft", filetypes = { "rst", unknown = {}, markdown = { mode = "hard", textwidth = 62 } } })
@@ -166,6 +169,34 @@ for _, win in ipairs({ left, right }) do
   end
 end
 pencil.disable({ buf=multi }); check(vim.wo[left].wrap == left_baseline and vim.wo[right].wrap == right_baseline, "disable restores original baselines"); reset(multi)
+-- Inactive cleanup cannot restore a released baseline over another buffer or edit.
+pencil.setup({ filetypes = {} })
+local owner_a = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = owner_a, mode = "soft" })
+local owner_b = api.nvim_create_buf(true, false); api.nvim_set_current_buf(owner_b); vim.bo[owner_b].filetype = "text"; vim.wo.wrap = false
+pencil.disable({ buf = owner_a }); check(vim.wo.wrap == false, "inactive disable preserves unrelated buffer window")
+local owner_c = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = owner_c, mode = "soft" })
+api.nvim_set_current_buf(owner_b); vim.wo.wrap = true; pencil.disable({ buf = owner_c }); check(vim.wo.wrap == true, "inactive disable preserves unrelated user edit")
+api.nvim_buf_delete(owner_a, { force = true }); api.nvim_buf_delete(owner_b, { force = true }); reset(owner_c)
+
+-- Away/back captures the latest baseline for final disable.
+local latest = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = latest, mode = "soft" })
+local latest_away = api.nvim_create_buf(true, false); api.nvim_set_current_buf(latest_away); vim.wo.wrap = true
+api.nvim_set_current_buf(latest); vim.wait(20); vim.cmd("doautocmd BufEnter"); vim.wait(20); vim.wo.wrap = true
+pencil.disable({ buf = latest }); check(vim.wo.wrap == true, "final disable restores latest away baseline")
+api.nvim_buf_delete(latest_away, { force = true }); reset(latest)
+
+-- Re-enable treats user edits as fresh baselines, including same-mode wrap and textwidth edits.
+local reenable = fresh({ "short" }, "text"); vim.wo.wrap = false; pencil.enable({ buf = reenable, mode = "soft" }); vim.wo.wrap = false
+pencil.enable({ buf = reenable, mode = "soft" }); check(vim.wo.wrap == true, "same-mode re-enable reapplies presentation without losing ownership")
+vim.wo.wrap = false; pencil.enable({ buf = reenable, mode = "soft" }); pencil.disable({ buf = reenable }); check(vim.wo.wrap == false, "same-mode wrap edit survives disable")
+vim.bo[reenable].textwidth = 91; pencil.enable({ buf = reenable, mode = "hard", textwidth = 70 }); vim.bo[reenable].textwidth = 92
+pencil.enable({ buf = reenable, mode = "hard", textwidth = 70 }); pencil.disable({ buf = reenable }); check(vim.bo[reenable].textwidth == 92, "textwidth edit survives re-enable and disable"); reset(reenable)
+
+-- Simultaneous buffers retain independent modes and presentation.
+local hard_buf = fresh({ "short" }, "text"); local soft_buf = api.nvim_create_buf(true, false); api.nvim_buf_set_lines(soft_buf, 0, -1, false, { "short" }); vim.bo[soft_buf].filetype = "text"
+pencil.enable({ buf = hard_buf, mode = "hard", textwidth = 70 }); pencil.enable({ buf = soft_buf, mode = "soft" })
+check(pencil.mode({ buf = hard_buf }) == "hard" and pencil.mode({ buf = soft_buf }) == "soft", "simultaneous buffers keep different modes"); reset(hard_buf); reset(soft_buf)
+
 -- Disabled buffers are removed on wipeout even when inactive.
 pencil.setup({ filetypes = {} }); local stale = fresh({ "short" }, "text"); pencil.disable({ buf = stale }); api.nvim_buf_delete(stale, { force = true }); vim.wait(20); check(pcall(pencil.mode, { buf = stale }) == false, "wiped disabled buffer is not retained")
 
