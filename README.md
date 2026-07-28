@@ -7,8 +7,13 @@ A Neovim-native writing plugin for wrapping, formatting, and focused prose editi
 With lazy.nvim:
 
 ```lua
-{ "jrswab/pencil.nvim" }
-{ "jrswab/pencil.nvim", opts = {} }
+return { "jrswab/pencil.nvim" }
+```
+
+Or, to enable automatic prose filetype activation:
+
+```lua
+return { "jrswab/pencil.nvim", opts = {} }
 ```
 
 A bare declaration loads the built-in defaults for direct `:Pencil` commands and Lua calls, but does **not** start automatic filetype activation. `opts = {}` calls `require("pencil").setup({})` and enables the built-in prose filetype set on `FileType`.
@@ -66,7 +71,7 @@ Pencil never changes the statusline. Add its indicator to lualine or a custom st
 
 ## Safety
 
-Pencil restores the exact buffer and window-local values it still owns and preserves edits made externally while active. Presentation is tracked independently for every window, including windows opened after activation. Conflicting mappings are skipped and warned once per key per buffer; they are never replaced or removed. Hard formatting fails closed for protected or unknown structured content. Conceal defaults to level 2 with markup visible on the cursor line and can be disabled with `conceal = false`. Soft mode wraps visually near its configured width and leaves `colorcolumn` unchanged; hard mode inserts real breaks via `textwidth`. Routine activation and suspension are quiet; notifications are reserved for invalid input, explicit failures, and mapping conflicts.
+Pencil restores the exact buffer and window-local values it still owns and preserves edits made externally while active. Presentation is tracked independently for every window, including windows opened after activation. In soft mode, Pencil owns the presentation and width-dependent `statuscolumn` padding used to wrap visually near the configured width; it leaves `colorcolumn` unchanged. Hard mode inserts real breaks via `textwidth` and does not soft-wrap. Conflicting mappings are skipped and warned once per key per buffer; they are never replaced or removed. Hard formatting fails closed for protected or unknown structured content. Conceal defaults to level 2 with markup visible on the cursor line and can be disabled with `conceal = false`. Routine activation and suspension are quiet; notifications are reserved for invalid input, explicit failures, and mapping conflicts.
 
 ## Migration
 
