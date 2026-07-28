@@ -1,0 +1,38 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  nvim:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 0.10
+            version: v0.10.4
+            expected: '^NVIM v0\.10\.'
+          - name: stable
+            version: v0.12.4
+            expected: '^NVIM v0\.12\.'
+    runs-on: ubuntu-latest
+    name: Neovim ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Neovim ${{ matrix.version }}
+        run: |
+          curl --fail --location --retry 3 -o nvim.tar.gz \
+            "https://github.com/neovim/neovim/releases/download/${{ matrix.version }}/nvim-linux-x86_64.tar.gz"
+          tar -xzf nvim.tar.gz
+          echo "$PWD/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Verify exact binary
+        run: |
+          nvim --version | head -3
+          nvim --version | grep -E '${{ matrix.expected }}'
+          if nvim --version | grep -Eiq 'dev|nightly|\+\+'; then
+            echo "development or nightly Neovim is not a supported matrix binary" >&2
+            exit 1
+          fi
+      - name: Run isolated suite
+        run: ./tests/run.sh

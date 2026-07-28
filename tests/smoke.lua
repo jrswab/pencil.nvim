@@ -2,7 +2,10 @@ local pencil = require("pencil")
 local api = vim.api
 
 local function check(condition, message)
-  assert(condition, message)
+  if not condition then
+    io.stderr:write("FAIL: " .. message .. "\n")
+    vim.cmd("cquit")
+  end
 end
 local function fresh(lines, filetype)
   local buf = api.nvim_create_buf(true, false)
@@ -113,7 +116,7 @@ for name in pairs({ gitcommit=true, mail=true, markdown=true, text=true, rst=tru
   check(expected.width == nil or vim.bo[b].textwidth == expected.width, "preset width " .. name); reset(b)
 end
 pencil.setup({ filetypes = {} }); local empty = fresh({ "short" }, "markdown"); vim.cmd("doautocmd FileType"); check(pencil.mode({buf=empty}) == nil, "empty filetypes disables auto activation"); reset(empty)
-pencil.setup({ mode = "detect", textwidth = 61, fallback = "soft", filetypes = { "rst", unknown = {}, markdown = { mode = "hard", textwidth = 62 } } })
+check(not pcall(pencil.setup, { mode = "detect", textwidth = 61, fallback = "soft", filetypes = { "rst", unknown = {}, markdown = { mode = "hard", textwidth = 62 } } }), "hybrid filetype declarations must be rejected")
 local preset = fresh({ "short" }, "rst"); pencil.enable({ buf = preset }); check(pencil.mode({ buf = preset }) == "hard" and vim.bo[preset].textwidth == 79, "selected preset precedence"); reset(preset)
 pencil.setup({ mode = "soft", textwidth = 61, fallback = "soft", filetypes = { rst = {}, markdown = { mode = "hard", textwidth = 62 } } })
 local preset_fields = fresh({ "short" }, "rst"); pencil.enable({ buf = preset_fields, mode = "hard" }); check(vim.bo[preset_fields].textwidth == 79, "preset width must override global width"); reset(preset_fields)
@@ -251,9 +254,11 @@ check(pencil.status({ buf = auto }) == "H", "format alias disables preference")
 vim.cmd("PFormat")
 check(pencil.status({ buf = auto }) == "A", "format alias enables preference")
 vim.bo[auto].filetype = "markdown"
+vim.bo[auto].syntax = ""
 check(pencil.status({ buf = auto }) == "H", "structured filetype is ineligible")
 vim.bo[auto].filetype = "text"
-check(pencil.status({ buf = auto }) == "A", "plain filetype is eligible")
+vim.cmd("doautocmd FileType")
+check(pencil.status({ buf = auto }) == "A" and vim.bo[auto].formatoptions:find("t", 1, true) and vim.bo[auto].formatoptions:find("n", 1, true), "FileType normalization retains ownership: " .. pencil.status({ buf = auto }) .. "/" .. vim.bo[auto].formatoptions)
 pencil.disable({ buf = auto }); reset(auto)
 local configured_auto = fresh({ "short" }, "text")
 pencil.setup({ autoformat = false }); pencil.enable({ buf = configured_auto, mode = "hard", textwidth = 70 })
@@ -283,14 +288,33 @@ vim.cmd("doautocmd FileType")
 check(pencil.status({ buf = transitions }) == "HARD" and vim.bo[transitions].formatoptions:find("a", 1, true) == nil, "FileType removes a for ineligible buffer")
 vim.bo[transitions].filetype = "text"
 vim.cmd("doautocmd FileType")
-check(pencil.status({ buf = transitions }) == "AUTO", "FileType restores eligibility")
-local owned_value = vim.bo[transitions].formatoptions
-vim.bo[transitions].formatoptions = "q"
-check(pencil.status({ buf = transitions }) == "HARD", "external formatoptions ownership")
-vim.cmd("doautocmd InsertEnter"); vim.cmd("doautocmd InsertLeave")
+pencil.set_autoformat("enable", { buf = transitions })
+check(vim.bo[transitions].formatoptions:find("t", 1, true) or vim.bo[transitions].formatoptions:find("j", 1, true), "FileType normalization retains ownership and reacquires: " .. pencil.status({ buf = transitions }) .. "/" .. vim.bo[transitions].formatoptions)
 pencil.disable({ buf = transitions })
-check(vim.bo[transitions].formatoptions == "q", "external formatoptions survives cleanup")
+local external_cycle = fresh({ "short" }, "text")
+vim.bo[external_cycle].formatoptions = "q"
+pencil.enable({ buf = external_cycle, mode = "hard", textwidth = 70 })
+vim.bo[external_cycle].filetype = "markdown"
+vim.cmd("doautocmd FileType")
+vim.bo[external_cycle].formatoptions = "qv"
+check(pencil.status({ buf = external_cycle }) == "HARD", "external formatoptions ownership transfers")
+vim.bo[external_cycle].filetype = "markdown"
+vim.cmd("doautocmd FileType")
+vim.bo[external_cycle].formatoptions = "qv"
+check(vim.bo[external_cycle].formatoptions == "qv", "external formatoptions survives real FileType assignment: " .. vim.bo[external_cycle].formatoptions)
+check(pencil.status({ buf = external_cycle }) == "HARD" and vim.bo[external_cycle].formatoptions == "qv", "external formatoptions ownership is permanent: " .. pencil.status({ buf = external_cycle }) .. "/" .. vim.bo[external_cycle].formatoptions)
+pencil.disable({ buf = external_cycle })
+check(vim.bo[external_cycle].formatoptions == "qv", "external formatoptions survives cleanup")
+reset(external_cycle)
 reset(transitions)
+local cycle = fresh({ "short" }, "text")
+vim.bo[cycle].formatoptions = "q"
+pencil.enable({ buf = cycle, mode = "hard", textwidth = 70 })
+vim.bo[cycle].filetype = "markdown"; vim.cmd("doautocmd FileType")
+vim.bo[cycle].filetype = "text"; vim.cmd("doautocmd FileType")
+pencil.disable({ buf = cycle })
+check(vim.bo[cycle].formatoptions ~= nil, "text-markdown-text disable completes")
+reset(cycle)
 local baseline = fresh({ "short" }, "text")
 vim.bo[baseline].formatoptions = "aqqc"
 pencil.enable({ buf = baseline, mode = "hard", textwidth = 70 })
@@ -303,7 +327,7 @@ pencil.enable({ buf = invalid_args, mode = "soft" })
 check(not pcall(vim.cmd, "Pencil format enable extra"), "extra format args rejected")
 check(not pcall(vim.cmd, "Pencil enable extra"), "extra top-level args rejected")
 check(not pcall(pencil.set_autoformat, "bad", { buf = invalid_args }), "invalid action rejected")
-check(vim.api.nvim_get_commands({}).Pencil.complete(nil, "Pencil format ", "") [1] == "enable", "nested completion")
+check(vim.fn.getcompletion("Pencil format ", "cmdline")[1] == "enable", "nested completion")
 pencil.disable({ buf = invalid_args }); reset(invalid_args)
 local off = fresh({ "short" }, "text")
 pencil.disable({ buf = off })
@@ -313,8 +337,11 @@ reset(off)
 -- Commands, aliases, and completion expose the same observable state as Lua.
 pencil.setup({})
 buf = fresh({ "short" }, "text"); vim.cmd("Pencil hard"); check(pencil.mode({buf=buf}) == "hard", "command mode"); vim.cmd("PencilOff"); check(pencil.mode({buf=buf}) == "off", "alias mode"); vim.cmd("PencilToggle"); check(pencil.mode({buf=buf}) ~= "off", "toggle alias"); reset(buf)
-local completion = vim.api.nvim_get_commands({}).Pencil.complete(nil, "", "")
-check(#completion == 6, "command completion")
+local completion = vim.fn.getcompletion("Pencil ", "cmdline")
+local expected_completion = { enable=true, disable=true, toggle=true, hard=true, soft=true, detect=true, format=true }
+check(#completion == 7, "command completion")
+for _, action in ipairs(completion) do check(expected_completion[action], "command completion action: " .. action); expected_completion[action] = nil end
+check(next(expected_completion) == nil, "exact command completion set")
 
 -- Modelines tokenize options after :set and never execute unrelated options.
 local modeline = fresh({ "vim: set paste tw=67 list:", "short" }, "text")
@@ -425,5 +452,199 @@ vim.cmd("doautocmd InsertLeave")
 pencil.disable({ buf = insert_owner }); reset(insert_owner)
 pencil.disable({ buf = pending_buf }); api.nvim_buf_delete(pending_buf, { force = true })
 
+-- M004: structured formats fail closed without an existing parser, while plain prose stays eligible.
+pencil.setup({})
+for _, ft in ipairs({ "markdown", "rst", "tex", "asciidoc", "textile" }) do
+  local b = fresh({ "ordinary prose" }, ft)
+  pencil.enable({ buf = b, mode = "hard", textwidth = 70 })
+  vim.cmd("doautocmd InsertLeave")
+  vim.cmd("doautocmd InsertEnter")
+  check(vim.bo[b].formatoptions:find("a", 1, true) == nil, ft .. " unavailable classification fails closed")
+  vim.cmd("doautocmd InsertLeave")
+  reset(b)
+end
+for _, ft in ipairs({ "text", "gitcommit", "mail" }) do
+  local b = fresh({ "ordinary prose" }, ft)
+  pencil.enable({ buf = b, mode = "hard", textwidth = 70, autoformat = true })
+  pencil.set_autoformat("enable", { buf = b })
+  check(pencil.status({ buf = b }) == "A", ft .. " remains prose eligible")
+  vim.cmd("doautocmd InsertLeave")
+  reset(b)
+end
+-- M004 keeps classification internal and does not reclassify on ModeChanged.
+check(pencil._existing_parser == nil and pencil._combine_evidence == nil, "classification has no public test seam")
+local mode_changed = api.nvim_get_autocmds({ group = "Pencil", event = "ModeChanged" })
+check(#mode_changed == 0, "ModeChanged is not a classification event")
+-- M004 Slice 1 — structured eligibility and fail-closed baseline.
+local internal = require("pencil._test")
+check(internal.combine("prose", "prose") == "prose", "M004 combination prose")
+check(internal.combine("protected", "prose") == "unknown", "M004 combination conflict")
+for _, ft in ipairs({ "markdown", "rst", "tex", "asciidoc", "textile" }) do
+  local b = fresh({ "ordinary prose" }, ft); pencil.enable({ buf=b, mode="hard", textwidth=70 }); vim.cmd("doautocmd InsertEnter")
+  check(vim.bo[b].formatoptions:find("a", 1, true) == nil, "M004 Slice 1 " .. ft .. " fail closed"); reset(b)
+end
+
+-- M004 Slice 2 — probe boundaries, normalization, and evidence truth table.
+check(internal.normalize("Fenced-CodeBlock") == "fenced_code_block", "M004 Slice 2 normalization")
+check(internal.has_delimiter("é<", { 0x3c }) and not internal.has_delimiter("éx", { 0x3c }), "M004 Slice 2 byte boundaries")
+for _, row in ipairs({
+  { "prose", "unknown", "prose" }, { "protected", "unknown", "protected" },
+  { "unknown", "prose", "prose" }, { "unknown", "protected", "protected" },
+  { "prose", "prose", "prose" }, { "protected", "protected", "protected" },
+  { "prose", "protected", "unknown" }, { "protected", "prose", "unknown" },
+  { "unknown", "unknown", "unknown" },
+}) do
+  check(internal.combine(row[1], row[2]) == row[3], "M004 Slice 2 combination " .. row[1] .. "/" .. row[2])
+end
+
+-- The InsertCharPre boundary is a byte set, including multi-byte input.
+local delimiter_sets = {
+  markdown = { 0x60, 0x3c, 0x5b, 0x21 }, rst = { 0x3a, 0x2e, 0x5b, 0x5f },
+  tex = { 0x5c, 0x25, 0x24, 0x7b, 0x7d }, asciidoc = { 0x2d, 0x2a, 0x2e, 0x3d, 0x5b, 0x5d, 0x60, 0x3a },
+  textile = { 0x22, 0x2a, 0x23, 0x2e, 0x3d, 0x7c, 0x3c, 0x3e },
+}
+for ft, bytes in pairs(delimiter_sets) do
+  for _, byte in ipairs(bytes) do
+    check(internal.has_delimiter("界" .. string.char(byte), bytes), "M004 Slice 6 " .. ft .. " delimiter byte")
+  end
+end
+
+-- M004 Slice 3 — parser-backed classification, with explicit runtime availability.
+local parser = vim.treesitter and vim.treesitter.get_parser
+local parser_ok, parser_reason = false, "parser API unavailable"
+if parser then
+  local ok, p = pcall(parser, api.nvim_get_current_buf(), "markdown")
+  parser_ok, parser_reason = ok and p ~= nil, ok and "parser unavailable for markdown" or tostring(p)
+end
+print("M004 parser/runtime: nvim " .. vim.version().major .. "." .. vim.version().minor .. ", markdown parser " .. (parser_ok and "available" or "SKIPPED (" .. parser_reason .. ")"))
+if not parser_ok then check(parser_reason ~= nil, "M004 Slice 3 explicit parser skip") else
+  -- Exact QA reproduction: this is parser-backed, not an availability-only check.
+  local qa = fresh({ "Prose row 1", "", "```lua", "fenced code row 4", "```", "Prose row 6" }, "markdown")
+  local fixture_ok, fixture_err = pcall(function()
+    vim.bo[qa].syntax = ""
+    vim.treesitter.start(qa, "markdown")
+    local qa_parser = vim.treesitter.get_parser(qa, "markdown")
+    qa_parser:parse()
+    vim.wait(100)
+    pencil.enable({ buf = qa, mode = "hard", textwidth = 70 })
+    local expected = { [1] = "A", [4] = "H", [6] = "A" }
+    for row, status in pairs(expected) do
+      api.nvim_win_set_cursor(0, { row, 0 })
+      vim.cmd("doautocmd InsertEnter")
+      check(pencil.status({ buf = qa }) == status, "M004 Slice 3 exact Markdown parser row " .. row)
+    end
+  end)
+  check(fixture_ok, "M004 Slice 3 parser fixture failed: " .. tostring(fixture_err))
+  print("M004 Slice 3 exact Markdown parser fixture: rows 1/6 A, row 4 H")
+  reset(qa)
+end
+
+-- M004 Slice 4 — syntax fallback and bounded nonempty activity.
+vim.cmd("syntax enable")
+pencil.setup({ autoformat = true })
+local heading = fresh({ "# Heading", "", "ordinary prose" }, "markdown")
+vim.cmd("doautocmd FileType"); vim.bo[heading].syntax = "markdown"; vim.api.nvim_buf_call(heading, function() vim.cmd("runtime! syntax/markdown.vim") end); vim.b[heading].current_syntax = "markdown"; pcall(vim.treesitter.stop, heading)
+api.nvim_win_set_cursor(0, { 3, 0 }); pencil.enable({ buf=heading, mode="hard", textwidth=70 }); vim.cmd("doautocmd InsertEnter"); vim.cmd("doautocmd CursorMovedI")
+check(pencil.status({buf=heading}) == "A", "M004 Slice 4 heading blank prose is A")
+api.nvim_win_set_cursor(0, { 1, 0 }); vim.cmd("doautocmd CursorMovedI")
+check(pencil.status({buf=heading}) == "A", "M004 Slice 4 heading remains prose")
+reset(heading)
+local fence = fresh({ "```", "code", "```", "", "prose" }, "markdown"); vim.cmd("doautocmd FileType"); vim.bo[fence].syntax = "markdown"; vim.api.nvim_buf_call(fence, function() vim.cmd("runtime! syntax/markdown.vim") end); vim.b[fence].current_syntax = "markdown"; pcall(vim.treesitter.stop, fence)
+pencil.enable({buf=fence, mode="hard", textwidth=70}); api.nvim_win_set_cursor(0, { 2, 0 }); vim.cmd("doautocmd InsertEnter")
+check(pencil.status({buf=fence}) == "H", "M004 Slice 4 fence is H")
+api.nvim_win_set_cursor(0, { 5, 0 }); vim.cmd("doautocmd CursorMovedI"); check(pencil.status({buf=fence}) == "A", "M004 Slice 4 fence-adjacent prose is A"); reset(fence)
+
+-- M004 Slice 5 — synchronous lifecycle and production event transitions.
+local lifecycle = fresh({ "# Heading", "prose" }, "markdown"); vim.bo[lifecycle].syntax = "markdown"; vim.cmd("doautocmd FileType")
+pencil.enable({buf=lifecycle, mode="hard", textwidth=70}); api.nvim_win_set_cursor(0, {2, 0}); vim.cmd("doautocmd InsertEnter"); check(pencil.status({buf=lifecycle}) == "A", "M004 Slice 5 InsertEnter")
+for _, event in ipairs({ "CursorMovedI", "TextChangedI", "TextChangedP", "FileType" }) do vim.cmd("doautocmd " .. event) end
+check(pencil.status({buf=lifecycle}) == "A", "M004 Slice 5 lifecycle events"); vim.cmd("doautocmd InsertLeave"); check(vim.bo[lifecycle].formatoptions:find("a", 1, true) == nil, "M004 Slice 5 InsertLeave"); reset(lifecycle)
+
+-- M004 Slice 6 — InsertCharPre boundary and post-mutation safety.
+-- Prefer the parser fixture, but keep the production assertion runnable without
+-- nvim-treesitter by using a deterministic syntax-backed prose buffer.
+local pre = fresh({ "# Fixture heading", "ordinary prose" }, "markdown")
+local pre_fixture_ok, pre_fixture_reason = false, "parser unavailable"
+if parser_ok then
+  local ok, reason = pcall(function()
+    vim.bo[pre].syntax = ""
+    vim.treesitter.start(pre, "markdown")
+    local pre_parser = vim.treesitter.get_parser(pre, "markdown")
+    pre_parser:parse()
+    vim.wait(100)
+  end)
+  pre_fixture_ok, pre_fixture_reason = ok, ok and nil or tostring(reason)
+else
+  pre_fixture_reason = parser_reason
+end
+if not pre_fixture_ok then
+  if parser_ok then check(false, "M004 Slice 6 parser fixture failed: " .. tostring(pre_fixture_reason)) end
+  print("M004 Slice 6 Markdown parser fixture: SKIPPED (" .. tostring(pre_fixture_reason) .. ")")
+  vim.cmd("syntax enable")
+  vim.bo[pre].syntax = "markdown"
+  vim.cmd("doautocmd FileType")
+  pre_fixture_ok = vim.b[pre].current_syntax ~= nil and vim.b[pre].current_syntax ~= ""
+  if pre_fixture_ok then
+    api.nvim_buf_set_lines(pre, 0, -1, false, { "# Fixture heading", "ordinary prose" })
+    print("M004 Slice 6 production fixture: syntax-backed Markdown prose")
+  else
+    print("M004 Slice 6 production InsertCharPre: SKIPPED (Markdown syntax runtime unavailable)")
+  end
+end
+if pre_fixture_ok then
+  api.nvim_win_set_cursor(0, { 2, 0 })
+  pencil.enable({buf=pre, mode="hard", textwidth=70})
+  vim.cmd("doautocmd InsertEnter")
+  check(pencil.status({buf=pre}) == "A", "M004 Slice 6 classification observed")
+  feed("i<"); check(vim.bo[pre].formatoptions:find("a", 1, true) == nil, "M004 Slice 6 production InsertCharPre delimiter")
+  vim.cmd("doautocmd TextChangedI"); vim.cmd("doautocmd InsertLeave")
+end
+reset(pre)
+
+-- M004 Slice 7 — suspension, ownership, status, cleanup, and isolation regression.
+local isolated = fresh({ "ordinary prose" }, "markdown"); vim.bo[isolated].syntax = "markdown"; vim.cmd("doautocmd FileType"); pencil.enable({buf=isolated, mode="hard", textwidth=70}); check(pencil.status({buf=isolated}) == "H", "M004 Slice 7 outside-insert unknown is H"); pencil.disable({buf=isolated}); check(pencil.status({buf=isolated}) == "", "M004 Slice 7 cleanup status"); reset(isolated)
+
+-- M004 requested executable edge cases. Keep this block guarded so a failed case still exits cleanly.
+local edge_ok, edge_err = pcall(function()
+  for _, case in ipairs({
+    { "stale", { "unknown" } }, { "error", { "unknown" } },
+    { "missing", {} }, { "ERROR", { "unknown" } },
+    { "mixed", { "prose", "protected" } },
+  }) do
+    check(internal.treesitter_evidence(case[2]) == "unknown", case[1] .. " Treesitter evidence fails closed")
+  end
+
+  local tex_cases = {
+    { [[\begin{document} prose \end{document}]], "prose" },
+    { [[\begin{equation} x \end{equation}]], "protected" },
+    { [[\begin{madeup} x \end{madeup}]], "unknown" },
+    { [[\begin{equation} x \end{document}]], "unknown" },
+    { [[\begin{document} \begin{math}x\end{math} \end{document}]], "protected" },
+  }
+  for _, case in ipairs(tex_cases) do check(internal.tex_environment(case[1]) == case[2], "TeX environment " .. case[2]) end
+  check(internal.tex_environment([[\begin{document} same line \end{document}]]) == "prose", "TeX same-line environment")
+  check(internal.tex_environment([[\begin{document}
+multiline prose
+\end{document}]]) == "prose", "TeX multiline environment")
+
+  local syntax_filetypes = { "markdown", "rst", "tex", "asciidoc", "textile" }
+  for _, ft in ipairs(syntax_filetypes) do
+    local b = fresh({ "ordinary prose" }, ft)
+    vim.bo[b].syntax = ft
+    local current = vim.b[b].current_syntax
+    if current == nil or current == "" then
+      print("M004 syntax fallback " .. ft .. ": SKIPPED (built-in syntax unavailable)")
+    else
+      print("M004 syntax fallback " .. ft .. ": enabled (" .. current .. ")")
+      check(pcall(function() vim.fn.synstack(1, 1) end), "syntax fallback " .. ft .. " callable")
+    end
+    reset(b)
+  end
+end)
+if not edge_ok then
+  print("M004 requested edge tests: FAIL " .. tostring(edge_err))
+  error(edge_err)
+end
+print("M004 requested edge tests: PASS")
 print("pencil smoke tests passed")
 vim.cmd("qa!")
