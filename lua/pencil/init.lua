@@ -207,10 +207,14 @@ local function soft_statuscolumn(state, win)
   local digits = #tostring(api.nvim_buf_line_count(state.buf))
   local gutter = (vim.wo[win].signcolumn == "no" and 0 or 2) + (tonumber(vim.wo[win].foldcolumn) or 0)
   if number then gutter = gutter + digits + 1 end
+  -- The statuscolumn is the left edge of the text area, so its complete
+  -- display width—not just its padding—must be accounted for.
   local pad = math.max(0, width - state.width - gutter)
   local previous = state.windows[win] and state.windows[win].statuscolumn
   local column = previous and previous.old or vim.wo[win].statuscolumn
   if column == "" then
+    -- deliberate: replace the empty default with the standard gutter tokens;
+    -- statuscolumn has no implicit sign, fold, or number rendering.
     column = "%s%C"
     if number then column = column .. "%=%{v:relnum == 0 ? v:lnum : v:relnum} " end
   end
@@ -233,12 +237,12 @@ local function apply_window(state, win, entering)
   if not owned then
     if not entering then return end
     local transition = transition_baseline[win]
-    local baseline = transition and transition.values or snapshot_window(win)
+    local baseline = transition and transition.buf == state.buf and transition.values or snapshot_window(win)
     transition_baseline[win] = nil
     owned = {}; state.windows[win] = owned
     for _, key in ipairs(window_options) do
       local desired = desired_window(state, key, win)
-      if desired ~= nil then owned[key] = { old = baseline[key], ours = desired }; vim.wo[win][key] = desired end
+      if desired ~= nil then owned[key] = { old = baseline[key], ours = desired, values = { [desired] = true } }; vim.wo[win][key] = desired end
     end
     return
   end
@@ -250,11 +254,15 @@ local function apply_window(state, win, entering)
     elseif record then
       if vim.wo[win][key] == record.ours then
         if desired == nil then vim.wo[win][key] = record.old; owned[key] = nil
-        else vim.wo[win][key], record.ours = desired, desired end
+        else vim.wo[win][key], record.ours = desired, desired; record.values[desired] = true end
+      elseif key == "statuscolumn" and record.values[vim.wo[win][key]] then
+        -- Width changes produce a new value. Keep ownership across that
+        -- transition; only a value Pencil has never written is user-owned.
+        vim.wo[win][key], record.ours = desired, desired; record.values[desired] = true
       else owned[key] = { user = true }
       end
     elseif desired ~= nil then
-      owned[key] = { old = vim.wo[win][key], ours = desired }; vim.wo[win][key] = desired
+      owned[key] = { old = vim.wo[win][key], ours = desired, values = { [desired] = true } }; vim.wo[win][key] = desired
     end
   end
 end
@@ -996,9 +1004,12 @@ local function setup_autocmds()
         end)
         restore_window(owner, win, true)
       end
-      if api.nvim_win_is_valid(win) then transition_baseline[win] = { buf = a.buf, values = snapshot_window(win) } end
     end
-    if a.event == "WinClosed" then transition_baseline[win] = nil end
+    if a.event == "BufEnter" and api.nvim_win_is_valid(win) then
+      -- This snapshot belongs to the buffer being entered, not the buffer
+      -- that just left; associating it with the wrong buffer leaks baselines.
+      transition_baseline[win] = { buf = a.buf, values = snapshot_window(win) }
+    elseif a.event == "WinClosed" then transition_baseline[win] = nil end
     queue(win)
   end})
   api.nvim_create_autocmd("BufUnload",{group=group,callback=function(a)
