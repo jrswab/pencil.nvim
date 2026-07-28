@@ -491,9 +491,9 @@ All planning questions raised during exploration have been answered:
 
 ## 2. Milestones
 
-- [ ] 001: Deliver an installable Neovim 0.10+ plugin whose optional setup, built-in prose presets, automatic activation, unified commands, wrap detection, mode reporting, multi-window behavior, and exact disable restoration form a complete safe enable–edit–disable workflow.
-- [ ] 002: Deliver conflict-safe writing navigation and Insert undo behavior, including physical-line alternatives, configurable mapping groups, and reliable repeated activation without disturbing user mappings.
-- [ ] 003: Deliver hard-mode automatic formatting for plain prose, including safe Insert lifecycle control, numbered-list handling, manual format controls, suspension for the next Insert, and exact restoration.
-- [ ] 004: Deliver fail-closed automatic formatting for all built-in structured formats using protected-region classification across supported modern and fallback highlighting paths.
-- [ ] 005: Deliver user-defined filetype behavior, including merged preset overrides, unknown-filetype safety, explicit plain-text formats, and custom protected-region classifiers.
-- [ ] 006: Deliver a documented, tested, and release-ready `pencil.nvim` experience covering Lazy.nvim installation, Lua and command interfaces, statusline integration, migration intent, licensing attribution, supported Neovim versions, and the complete lifecycle and safety matrix.
+- [x] 001: Deliver an installable Neovim 0.10+ plugin whose optional setup, built-in prose presets, automatic activation, unified commands, wrap detection, mode reporting, multi-window behavior, and exact disable restoration form a complete safe enable–edit–disable workflow.
+- [x] 002: Deliver conflict-safe writing navigation and Insert undo behavior, including physical-line alternatives, configurable mapping groups, and reliable repeated activation without disturbing user mappings.
+- [x] 003: Deliver hard-mode automatic formatting for plain prose, including safe Insert lifecycle control, numbered-list handling, manual format controls, suspension for the next Insert, and exact restoration.
+- [x] 004: Deliver fail-closed automatic formatting for all built-in structured formats using protected-region classification across supported modern and fallback highlighting paths.
+- [x] 005: Deliver user-defined filetype behavior, including merged preset overrides, unknown-filetype safety, explicit plain-text formats, and custom protected-region classifiers.
+- [x] 006: Deliver a documented, tested, and release-ready `pencil.nvim` experience covering Lazy.nvim installation, Lua and command interfaces, statusline integration, migration intent, licensing attribution, supported Neovim versions, and the complete lifecycle and safety matrix.

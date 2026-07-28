@@ -66,9 +66,9 @@ Milestone 006 turns the existing Neovim-native `pencil.nvim` implementation into
 
 **Dependency:** Slices 1–4. This slice adds no product behavior; it proves agreement, generated artifacts, and repository boundaries.
 
-- [ ] `README.md`, `doc/pencil.txt`, `doc/tags`, `.github/workflows/test.yml`, `tests/m006.lua`, and `tests/run.sh: final acceptance pass` — verify all §3, §8, and §9 requirements, README/help agreement, seven tags, supported-version statements, migration/license/attribution claims, exact commands/aliases/status semantics, and absence of changelog/tag/release automation.
+- [x] `README.md`, `doc/pencil.txt`, `doc/tags`, `.github/workflows/test.yml`, `tests/m006.lua`, and `tests/run.sh: final acceptance pass` — verify all §3, §8, and §9 requirements, README/help agreement, seven tags, supported-version statements, migration/license/attribution claims, exact commands/aliases/status semantics, and absence of changelog/tag/release automation.
 - [x] `lua/pencil/init.lua`, `plugin/pencil.lua`, `lua/pencil/classification.lua`, `lua/pencil/_test.lua`, `tests/smoke.lua`, and `tests/m005.lua: regression boundary` — confirm existing runtime and test seams are unchanged unless a specific M006 regression correction is recorded with its test and rationale; do not expose private helpers in documentation.
-- [ ] `docs/plans/006_release_readiness_spec.md: authority check` — reread Context and Constraints and confirm the implementation checklist follows its fixed decisions without re-evaluating or changing the specification.
+- [x] `docs/plans/006_release_readiness_spec.md: authority check` — reread Context and Constraints and confirm the implementation checklist follows its fixed decisions without re-evaluating or changing the specification.
 - [x] `tests/run.sh: final local validation` — run the exact specification validation commands for module loading, `:help pencil`, `helptags doc`, all seven tags, `nvim --version`, `git diff --check`, and `git status --short`; report unavailable Neovim matrix binaries rather than substituting another version.
 
 **Independently testable outcome:** the final diff contains only the M006 deliverables plus any explicitly justified narrow runtime correction, and the repository is ready for evaluation without creating a release.
@@ -89,11 +89,13 @@ Integrate in slice order. Run the complete real-Neovim suite after each integrat
 
 ## Acceptance / Verification
 
-- [ ] Verify `README.md` contains the exact `jrswab/pencil.nvim` installation identity, Neovim 0.10+ requirement, Vim unsupported/no-dependency statements, both Lazy.nvim examples with distinct semantics, setup/API/command/statusline examples, safety guarantees, migration heading, LICENSE link, and verified inspiration URL.
-- [ ] Verify `doc/pencil.txt` contains all seven exact stable tags and complete normative coverage for installation, configuration schemas/defaults/presets/precedence, API, commands/aliases/completion, status, lifecycle safety, classification, testing expectations, migration, license, and attribution.
-- [ ] Generate and validate `doc/tags` with the exact commands from the specification, then run `:help pencil` with `set rtp^=.`.
-- [ ] Run the deterministic runner and the existing isolated `tests/smoke.lua` and `tests/m005.lua` suites using real headless Neovim; record exact versions and parser availability/reasons.
+- [x] Verify `README.md` contains the exact `jrswab/pencil.nvim` installation identity, Neovim 0.10+ requirement, Vim unsupported/no-dependency statements, both Lazy.nvim examples with distinct semantics, setup/API/command/statusline examples, safety guarantees, migration heading, LICENSE link, and verified inspiration URL.
+- [x] Verify `doc/pencil.txt` contains all seven exact stable tags and complete normative coverage for installation, configuration schemas/defaults/presets/precedence, API, commands/aliases/completion, status, lifecycle safety, classification, testing expectations, migration, license, and attribution.
+- [x] Generate and validate `doc/tags` with the exact commands from the specification, then run `:help pencil` with `set rtp^=.`.
+- [x] Run the deterministic runner and the existing isolated `tests/smoke.lua` and `tests/m005.lua` suites using real headless Neovim; record exact versions and parser availability/reasons.
 - [ ] Run CI on exactly Neovim 0.10 and current stable; report any unavailable binary instead of substituting another version, and ensure the stable job rejects unsupported development builds.
-- [ ] Run the exact local validation sequence from §10: module load, help load, helptags generation, all seven tag checks, `nvim --version`, `git diff --check`, and `git status --short`.
-- [ ] Run `git diff --check -- docs/plans/006_release_readiness_implement.md` and inspect the plan with `git diff --no-index /dev/null docs/plans/006_release_readiness_implement.md` to confirm it contains only an implementation guide, no runtime/docs/CI implementation, and no placeholders.
-- [ ] Verify the planning task changes only `docs/plans/006_release_readiness_implement.md`; pre-existing working-tree changes in runtime/tests and untracked prior plans/specs are out of scope and must not be attributed to this guide.
+- [x] Run the exact local validation sequence from §10: module load, help load, helptags generation, all seven tag checks, `nvim --version`, `git diff --check`, and `git status --short`.
+- [x] Run `git diff --check -- docs/plans/006_release_readiness_implement.md` and inspect the plan with `git diff --no-index /dev/null docs/plans/006_release_readiness_implement.md` to confirm it contains only an implementation guide, no runtime/docs/CI implementation, and no placeholders.
+- [x] Verify the planning task changes only `docs/plans/006_release_readiness_implement.md`; pre-existing working-tree changes in runtime/tests and untracked prior plans/specs are out of scope and must not be attributed to this guide.
+
+**Local verification note:** The local acceptance run used NVIM v0.12.0-dev, including parser availability reporting; it did not verify the exact Neovim 0.10/current-stable CI matrix. CI remains pending until GitHub Actions runs.
