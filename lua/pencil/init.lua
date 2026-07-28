@@ -618,6 +618,21 @@ local function find_mapping(buf, mode, lhs)
   for _, map in ipairs(api.nvim_buf_get_keymap(buf, mode)) do if map.lhs == lhs then return map end end
   for _, map in ipairs(api.nvim_get_keymap(mode)) do if map.lhs == lhs then return map end end
 end
+local function is_default_insert_mapping(buf, spec)
+  if spec.mode ~= "i" or (spec.lhs ~= "<C-U>" and spec.lhs ~= "<C-W>") then return false end
+  if #api.nvim_buf_get_keymap(buf, spec.mode) > 0 then
+    for _, map in ipairs(api.nvim_buf_get_keymap(buf, spec.mode)) do
+      if map.lhs == spec.lhs then return false end
+    end
+  end
+  for _, map in ipairs(api.nvim_get_keymap(spec.mode)) do
+    if map.lhs == spec.lhs then
+      local default_desc = spec.lhs == "<C-U>" and ":help i_CTRL-U-default" or ":help i_CTRL-W-default"
+      return map.buffer == 0 and map.rhs == "<C-G>u" .. spec.lhs and map.desc == default_desc
+    end
+  end
+  return false
+end
 local function mapping_identity(spec)
   return { mode = spec.mode, lhs = spec.lhs, rhs = spec.rhs, buffer = nil,
     desc = mapping_owner, noremap = true, silent = true, expr = false,
@@ -632,14 +647,9 @@ local function mapping_matches(buf, record)
   end
   return (map.callback ~= nil) == record.callback
 end
-local function warn_mapping_conflict(state, lhs)
-  state.mapping_warnings = state.mapping_warnings or {}
-  if state.mapping_warnings[lhs] then return end
-  state.mapping_warnings[lhs] = true
-  vim.notify("Pencil skipped conflicting mapping " .. lhs .. " in buffer " .. state.buf, vim.log.levels.WARN)
-end
 local function reconcile_mappings(state)
-  state.mappings, state.mapping_warnings = state.mappings or {}, state.mapping_warnings or {}
+  state.mappings = state.mappings or {}
+  local skipped = {}
   local wanted = {}
   for _, spec in ipairs(mapping_list(state)) do
     local id = spec.mode .. "\0" .. spec.lhs
@@ -647,17 +657,21 @@ local function reconcile_mappings(state)
     local record = state.mappings[id]
     if record and not mapping_matches(state.buf, record) then state.mappings[id] = nil; record = nil end
     if not record then
-      if find_mapping(state.buf, spec.mode, spec.lhs) then warn_mapping_conflict(state, spec.lhs)
-      else
+      if find_mapping(state.buf, spec.mode, spec.lhs) and not is_default_insert_mapping(state.buf, spec) then
+        skipped[#skipped + 1] = spec.lhs
+      elseif not find_mapping(state.buf, spec.mode, spec.lhs) or is_default_insert_mapping(state.buf, spec) then
         local identity = mapping_identity(spec)
         vim.keymap.set(spec.mode, spec.lhs, identity.rhs, {
           buffer = state.buf, noremap = identity.noremap, silent = identity.silent, desc = identity.desc,
         })
         identity.buffer = state.buf
         state.mappings[id] = identity
-        state.mapping_warnings[spec.lhs] = nil
       end
     end
+  end
+  if #skipped > 0 then
+    -- deliberate: one notification per enable cycle keeps conflict-heavy buffers quiet.
+    vim.notify("Pencil skipped conflicting mappings " .. table.concat(skipped, ", ") .. " in buffer " .. state.buf, vim.log.levels.WARN)
   end
   for id, record in pairs(state.mappings) do
     if not wanted[id] then

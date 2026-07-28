@@ -227,5 +227,35 @@ check_statusline("disable")
 vim.go.statusline, vim.wo.statusline = global_statusline, window_statusline
 api.nvim_buf_delete(statusline_buf, { force = true })
 api.nvim_buf_delete(buf, { force = true })
+
+-- Mapping conflicts are additive: defaults are replaceable only as buffer-local Pencil maps,
+-- while real global and buffer-local user mappings survive and warn once per enable.
+local function mapping_get(buf, mode, lhs)
+  for _, map in ipairs(api.nvim_buf_get_keymap(buf, mode)) do if map.lhs == lhs then return map end end
+  for _, map in ipairs(api.nvim_get_keymap(mode)) do if map.lhs == lhs then return map end end
+end
+local mapping_buf = api.nvim_create_buf(true, false)
+api.nvim_set_current_buf(mapping_buf)
+vim.bo[mapping_buf].filetype = "text"
+local mapping_notifications = {}
+local mapping_notify = vim.notify
+vim.notify = function(message) mapping_notifications[#mapping_notifications + 1] = message end
+pencil.setup({ filetypes = {}, mappings = { navigation = false, undo_breaks = true } })
+pencil.enable({ buf = mapping_buf, mode = "soft" })
+check(mapping_get(mapping_buf, "i", "<C-U>") and mapping_get(mapping_buf, "i", "<C-W>"), "default insert undo mappings install")
+pencil.disable({ buf = mapping_buf })
+api.nvim_set_keymap("n", "j", ":echo 'global'\n", { expr = true })
+api.nvim_set_keymap("n", "k", ":echo 'global'\n", { expr = true })
+api.nvim_buf_set_keymap(mapping_buf, "n", "j", ":echo 'local'\n", { expr = true })
+pencil.setup({ filetypes = {}, mappings = { navigation = true, undo_breaks = false } })
+pencil.enable({ buf = mapping_buf, mode = "soft" })
+check(mapping_get(mapping_buf, "n", "j").rhs:find("global", 1, true) == nil and mapping_get(mapping_buf, "n", "j").rhs:find("local", 1, true) ~= nil, "buffer user mapping is not replaced")
+check(mapping_get(mapping_buf, "n", "k").rhs:find("global", 1, true) ~= nil, "global user mapping is not replaced")
+check(#mapping_notifications == 1 and mapping_notifications[1]:find("j", 1, true) and mapping_notifications[1]:find("k", 1, true), "mapping conflicts warn once in a batch")
+pencil.disable({ buf = mapping_buf })
+check(mapping_get(mapping_buf, "n", "j") and mapping_get(mapping_buf, "n", "k"), "user mappings survive teardown")
+vim.notify = mapping_notify
+api.nvim_del_keymap("n", "j"); api.nvim_del_keymap("n", "k")
+api.nvim_buf_delete(mapping_buf, { force = true })
 print("M006 tests passed")
 vim.cmd("qa!")
