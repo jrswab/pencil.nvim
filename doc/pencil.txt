@@ -163,7 +163,8 @@ means disabled. Pencil never changes the statusline; use:
 
 Window presentation is applied independently to every window displaying an
 enabled buffer, including late windows, and cleanup does not leak across
-buffers. Soft mode does not change colorcolumn or unrelated settings. Routine
+buffers. Soft mode wraps visually near its configured width and does not change
+colorcolumn or unrelated settings; hard mode inserts real breaks via textwidth. Routine
 activation, detection, and suspension are quiet; notifications are for invalid
 configuration/commands, explicit failures, mapping conflicts, and attempts to
 enable autoformat outside hard mode. Test with the repository's isolated

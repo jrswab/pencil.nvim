@@ -66,7 +66,7 @@ Pencil never changes the statusline. Add its indicator to lualine or a custom st
 
 ## Safety
 
-Pencil restores the exact buffer and window-local values it still owns and preserves edits made externally while active. Presentation is tracked independently for every window, including windows opened after activation. Conflicting mappings are skipped and warned once per key per buffer; they are never replaced or removed. Hard formatting fails closed for protected or unknown structured content. Conceal defaults to level 2 with markup visible on the cursor line and can be disabled with `conceal = false`. Soft mode leaves `colorcolumn` unchanged. Routine activation and suspension are quiet; notifications are reserved for invalid input, explicit failures, and mapping conflicts.
+Pencil restores the exact buffer and window-local values it still owns and preserves edits made externally while active. Presentation is tracked independently for every window, including windows opened after activation. Conflicting mappings are skipped and warned once per key per buffer; they are never replaced or removed. Hard formatting fails closed for protected or unknown structured content. Conceal defaults to level 2 with markup visible on the cursor line and can be disabled with `conceal = false`. Soft mode wraps visually near its configured width and leaves `colorcolumn` unchanged; hard mode inserts real breaks via `textwidth`. Routine activation and suspension are quiet; notifications are reserved for invalid input, explicit failures, and mapping conflicts.
 
 ## Migration
 
