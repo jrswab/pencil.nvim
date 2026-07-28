@@ -79,6 +79,26 @@ pencil.disable({ buf = buf })
 check(vim.bo[buf].formatoptions == "qjtc", "formatoptions restoration")
 reset(buf)
 
+-- Soft mode owns width-dependent statuscolumn padding without changing buffer formatting.
+pencil.setup({ filetypes = {} })
+local soft_wrap = fresh({ string.rep("x", 100) }, "text")
+vim.bo[soft_wrap].textwidth = 0
+vim.wo.statuscolumn, vim.wo.colorcolumn = "", "17"
+vim.api.nvim_win_set_width(0, 100)
+pencil.enable({ buf = soft_wrap, mode = "soft", textwidth = 72 })
+check(vim.wo.statuscolumn ~= "" and vim.bo[soft_wrap].textwidth == 0, "soft owns visual padding only")
+check(api.nvim_win_get_cursor(0)[1] == 1 and vim.fn.screenpos(0, 1, 100).row > 1, "soft wraps near configured width")
+check(vim.wo.colorcolumn == "17", "soft leaves colorcolumn untouched")
+local soft_column = vim.wo.statuscolumn
+api.nvim_win_set_width(0, 80); vim.cmd("doautocmd VimResized"); vim.wait(20)
+check(vim.wo.statuscolumn ~= "", "soft keeps owned padding after resize")
+pencil.enable({ buf = soft_wrap, mode = "hard", textwidth = 72 })
+check(vim.wo.statuscolumn == "", "hard does not own soft statuscolumn padding")
+check(vim.wo.wrap == false, "hard disables soft wrapping")
+pencil.disable({ buf = soft_wrap })
+check(vim.wo.statuscolumn == "" and vim.wo.colorcolumn == "17", "disable restores statuscolumn and colorcolumn")
+reset(soft_wrap)
+
 -- All valid concealcursor combinations work; invalid and duplicate values fail atomically.
 local valid = { "", "n", "v", "i", "c", "nvi", "nvic" }
 for _, cursor in ipairs(valid) do

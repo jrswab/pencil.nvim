@@ -200,9 +200,25 @@ local function validate_enable(opts)
   end
   if #errors > 0 then error("invalid pencil enable options:\n- " .. table.concat(errors, "\n- ")) end
 end
-local window_options = { "wrap", "linebreak", "breakindent", "conceallevel", "concealcursor" }
-local function desired_window(state, key)
+local window_options = { "wrap", "linebreak", "breakindent", "conceallevel", "concealcursor", "statuscolumn" }
+local function soft_statuscolumn(state, win)
+  local width = api.nvim_win_get_width(win)
+  local number = vim.wo[win].number or vim.wo[win].relativenumber
+  local digits = #tostring(api.nvim_buf_line_count(state.buf))
+  local gutter = (vim.wo[win].signcolumn == "no" and 0 or 2) + (tonumber(vim.wo[win].foldcolumn) or 0)
+  if number then gutter = gutter + digits + 1 end
+  local pad = math.max(0, width - state.width - gutter)
+  local previous = state.windows[win] and state.windows[win].statuscolumn
+  local column = previous and previous.old or vim.wo[win].statuscolumn
+  if column == "" then
+    column = "%s%C"
+    if number then column = column .. "%=%{v:relnum == 0 ? v:lnum : v:relnum} " end
+  end
+  return string.rep(" ", pad) .. column
+end
+local function desired_window(state, key, win)
   if key == "wrap" or key == "linebreak" or key == "breakindent" then return state.mode == "soft" end
+  if key == "statuscolumn" then return state.mode == "soft" and soft_statuscolumn(state, win) or nil end
   if not state.conceal then return nil end
   return key == "conceallevel" and state.conceal.level or state.conceal.cursor
 end
@@ -221,14 +237,14 @@ local function apply_window(state, win, entering)
     transition_baseline[win] = nil
     owned = {}; state.windows[win] = owned
     for _, key in ipairs(window_options) do
-      local desired = desired_window(state, key)
+      local desired = desired_window(state, key, win)
       if desired ~= nil then owned[key] = { old = baseline[key], ours = desired }; vim.wo[win][key] = desired end
     end
     return
   end
   -- A user edit ends ownership until this buffer leaves the window.
   for _, key in ipairs(window_options) do
-    local record, desired = owned[key], desired_window(state, key)
+    local record, desired = owned[key], desired_window(state, key, win)
     if record and record.user then
       -- Do not reacquire an option the user changed during this activation.
     elseif record then
@@ -703,13 +719,13 @@ function M.enable(opts)
   settings = merge(settings, opts)
   local ml, requested = modeline_width(buf), settings.mode
   local mode = requested == "detect" and detect(buf, settings) or requested
-  local width = mode == "hard" and (opts.textwidth or (ml and ml > 0 and ml) or (vim.bo[buf].textwidth > 0 and vim.bo[buf].textwidth) or settings.textwidth) or nil
-  if mode == "hard" and (type(width) ~= "number" or width < 1) then error("hard mode requires a positive textwidth") end
+  local width = opts.textwidth or (ml and ml > 0 and ml) or (vim.bo[buf].textwidth > 0 and vim.bo[buf].textwidth) or settings.textwidth
+  if type(width) ~= "number" or width < 1 then error("pencil requires a positive textwidth") end
   local state = previous or { windows={}, displayed={}, owned={} }
   state.displayed = state.displayed or {}
   state.buf = buf
   state.generation = (state.generation or 0) + 1
-  state.mode, state.width, state.settings, state.policy = mode, width, settings, policy
+  state.mode, state.width, state.soft_width, state.settings, state.policy = mode, width, width, settings, policy
   state.policy.safety = state.policy.classifier and "custom" or state.policy.safety
   state.policy.filetype = vim.bo[buf].filetype
   if opts.autoformat ~= nil then state.autoformat = opts.autoformat else state.autoformat = settings.autoformat end
@@ -953,6 +969,16 @@ local function setup_autocmds()
     pending[win] = true
     if not scheduled then scheduled = true; vim.schedule(reconcile) end
   end
+  api.nvim_create_autocmd({"WinResized", "VimResized"},{group=group,callback=function(a)
+    for _, state in pairs(active) do
+      if state.mode == "soft" then
+        local wins = a.event == "WinResized" and a.windows or api.nvim_list_wins()
+        for _, win in ipairs(wins or {}) do
+          if state.windows[win] and api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == state.buf then apply_window(state, win, false) end
+        end
+      end
+    end
+  end})
   api.nvim_create_autocmd({"BufWinEnter", "BufWinLeave", "BufEnter", "BufLeave", "WinEnter", "WinClosed"},{group=group,callback=function(a)
     local win = a.win or api.nvim_get_current_win()
     local owner = window_owner[win]
