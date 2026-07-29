@@ -1,195 +1,93 @@
 *pencil* *pencil.nvim*
                         pencil.nvim user manual
 
-Pencil is a Neovim-native writing plugin. It provides hard or soft wrapping,
-optional safe automatic formatting, concealment, navigation mappings, and
-status indicators. It is a clean redesign, not a Vim compatibility layer.
+Pencil presents a centered writing column with visual wrapping. It is a
+binary, buffer-local state: enabled or disabled. The bare |:Pencil| command
+works without calling setup().
 
-Supported versions: Neovim 0.10 and newer. Vim is unsupported. Pencil has no
-required runtime dependencies. Add this repository to 'runtimepath' to load
-its commands and Lua module.
+Supported version: Neovim 0.10 or newer. Vim is unsupported. Pencil has no
+runtime dependencies.
 
 See also: |pencil-installation| |pencil-configuration| |pencil-api|
-|pencil-commands| |pencil-status| |pencil-migration|
+|pencil-commands| |pencil-safety| |pencil-license|
 
 *pencil-installation*
 INSTALLATION
 
-Install jrswab/pencil.nvim with your plugin manager:
+Install jrswab/pencil.nvim with a plugin manager, or add the repository to
+Neovim's 'runtimepath':
 
     { "jrswab/pencil.nvim" }
-    { "jrswab/pencil.nvim", opts = {} }
 
-With Lazy.nvim, the bare declaration loads defaults for direct commands and
-Lua calls but does not enable automatic FileType activation. opts = {} calls
-setup({}) and enables the built-in prose filetypes on FileType. These forms
-therefore have different activation behavior. The repository is at
-https://github.com/jrswab/pencil.nvim.
+Loading the plugin registers the bare |:Pencil| command. No setup call is
+required. The repository is https://github.com/jrswab/pencil.nvim.
 
 *pencil-configuration*
 CONFIGURATION
 
-Call setup() once with a table. Validation is atomic: an invalid table raises
-one aggregate error and leaves the previous configuration and active buffers
-unchanged. A later valid setup applies to future activations only.
+Configuration is optional. The default preferred display width is 80:
 
-    require("pencil").setup({ mode = "detect", fallback = "soft", textwidth = 80 })
+    require("pencil").setup({ width = 80 })
 
-Defaults are mode="detect", fallback="soft", textwidth=80, autoformat=true,
-conceal={ level=2, cursor="" }, mappings={ navigation=true, undo_breaks=true },
-and status={ hard="H", auto="A", soft="S", off="" }.
+`width` is the only accepted key and must be a positive integer. Unknown keys,
+non-table values other than nil, and invalid widths raise an error. Validation
+is atomic: a failed setup leaves the previous preference and active
+presentations unchanged.
 
-The complete setup schema is:
+    require("pencil").setup({ width = 100 })
+    require("pencil").setup({})       " restore the default for later activations
+    require("pencil").setup(nil)      " leave the preference unchanged
 
-    mode = "hard" | "soft" | "detect"
-    fallback = "hard" | "soft"
-    textwidth = integer >= 1
-    autoformat = boolean
-    conceal = false | { level = 0..3, cursor = unique characters from "nvic" }
-    mappings = { navigation = boolean, undo_breaks = boolean }
-    status = { hard = string, auto = string, soft = string, off = string }
-    filetypes = { "text", ... } | { name = { ... } }
-
-A filetype entry may contain mode, fallback, textwidth, autoformat, conceal,
-mappings, and at most one of format_safety="plain" and classifier=function; they are mutually exclusive.
-The classifier receives { buf, win, row, col, filetype } and must return
-"prose", "protected", or "unknown"; failures and invalid results are
-unknown and fail closed. buf and win are integer handles, row is zero-based,
-col is a zero-based byte column, and filetype is a string. Unknown keys are
-invalid. Filetype lists have nonempty unique strings and replace automatic
-activation; keyed tables replace it and merge fields over a recognized preset,
-then global values, then defaults. filetypes = {} disables automatic
-activation. Direct controls remain available. Built-ins are:
-
-    gitcommit hard 72 plain       mail hard 72 plain
-    markdown detect soft          text detect soft plain
-    rst detect hard 79 structured tex detect hard 79 structured
-    asciidoc detect hard 79 structured
-    textile detect soft structured
-
-Per-call options use the following exact schemas. Every supplied options value
-must be a table; unknown keys are errors. A supplied buf must be an integer
-handle for a currently valid buffer. If buf is omitted, the current buffer is
-used.
-
-    pencil.enable({
-      buf = integer buffer handle,
-      mode = "hard" | "soft" | "detect",
-      textwidth = integer >= 1,
-      autoformat = boolean,
-      conceal = false | { level = integer 0..3,
-                          cursor = unique characters from "nvic" },
-      mappings = { navigation = boolean, undo_breaks = boolean },
-    })
-
-    pencil.disable({ buf = integer buffer handle })
-    pencil.toggle({ buf = integer buffer handle })
-    pencil.mode({ buf = integer buffer handle })
-    pencil.status({ buf = integer buffer handle })
-    pencil.set_autoformat("enable" | "disable" | "toggle" | "suspend",
-                          { buf = integer buffer handle })
-
-The tables shown for disable, toggle, mode, status, and set_autoformat are
-optional and may be empty when targeting the current buffer. enable(opts) also
-accepts an omitted opts argument and targets the current buffer; use enable({})
-when no per-call overrides are needed. All calls target the current buffer when
-buf is omitted.
-The conceal and mappings schemas are complete: nested unknown keys and invalid
-types are errors. Buffer handles are validated before state changes, including
-for disabled or untouched buffers. mode() returns "hard", "soft", "off", or
-nil; status() returns the configured string indicator.
-
-Per-call values override effective filetype, global, and default values where
-applicable. Modelines with positive textwidth select hard and zero selects soft.
-Detect samples nonblank content, selects soft immediately above 130 display
-columns, and uses fallback after 20 lines. Hard width precedence is per-call,
-positive modeline, existing positive buffer textwidth, then configured width.
-Hard mode uses buffer-local options; wrapping and presentation are window-local.
-
-Pencil-owned means Pencil installed a value and can identify it as unchanged.
-Disable restores exact owned values while preserving later external edits.
+Setup changes affect future activations only. An active buffer retains the
+preferred width captured when it was enabled. A preference wider than a
+window contracts safely to the available text area.
 
 *pencil-api*
 LUA API
 
     local pencil = require("pencil")
-    pencil.setup(config)
-    pencil.enable(opts)
-    pencil.disable(opts)
-    pencil.toggle(opts)
-    pencil.set_autoformat(action, opts)
-    pencil.mode(opts)
-    pencil.status(opts)
+    pencil.setup({ width = N })
+    pencil.enable(opts?)
+    pencil.disable(opts?)
+    pencil.toggle(opts?)
 
-All functions return nil except mode() and status(). mode() returns "hard",
-"soft", "off", or nil for untouched state. status() returns the configured
-indicator. set_autoformat actions are "enable", "disable", "toggle", and
-"suspend". Enabling or toggling format outside hard mode warns quietly and
-changes nothing. No private or _test module is public API.
-
-The mode/status configuration accepts exactly the keys hard, auto, soft, and
-off; each value must be a string. The default values are H, A, S, and an empty
-string respectively. Status returns the configured indicator for the current
-semantic state; Pencil never changes the statusline itself. Calling enable,
-disable, toggle, or set_autoformat never assigns or restores 'statusline'.
+`setup()` accepts nil or a table containing only `width`. The control functions
+accept nil, or `{ buf = bufnr }` for an explicitly targeted valid buffer. With
+nil, the current buffer is targeted. `enable()` and `disable()` are idempotent;
+`toggle()` switches the selected buffer's state. These are the complete public
+Lua exports.
 
 *pencil-commands*
 COMMANDS
 
-:Pencil, :Pencil enable, :Pencil disable, :Pencil toggle, :Pencil hard,
-:Pencil soft, :Pencil detect, and :Pencil format enable|disable|toggle|suspend
-are supported. Bare :Pencil detects. Completion offers the seven top-level
-actions and four format actions. Invalid or extra arguments error clearly.
-Aliases: :HardPencil, :SoftPencil, :NoPencil, :PencilOff, :TogglePencil,
-:PencilToggle, :PFormat, :PFormatOff, and :PFormatToggle.
+    :Pencil
 
-Hard formatting preserves the formatoptions baseline, adds only required
-flags while eligible, and suspends in protected or unknown structured regions.
-Pencil contributes t and n, and contributes temporary a only during an eligible
-Insert. Once formatoptions ownership transfers externally, FileType handling is
-completely hands-off and the exact external value is preserved.
-Navigation and undo-break mappings are conflict-safe. Conceal defaults to level
-2 with markup visible on the cursor line; conceal=false opts out.
+Bare `:Pencil` toggles the current buffer and accepts no arguments. There are
+no subcommands or aliases.
 
-*pencil-status*
-STATUS AND SAFETY
+*pencil-safety*
+BEHAVIOR AND SAFETY
 
-S means enabled soft mode. A means hard mode is armed, eligible, and
-Pencil-owned, including outside Insert mode. H means hard formatting is
-disabled, suspended, protected, unknown, or externally unowned. The off value
-means disabled. Pencil never changes the statusline; use:
+When enabled, Pencil centers a preferred visual column in every window showing
+the buffer and wraps long lines visually. Empty and short buffers receive the
+same presentation. Buffer text and hard line breaks are never changed; tabs
+and Unicode are measured using Neovim's display rules.
 
-    { function() return require("pencil").status() end }
+The presentation follows relevant resize, split, and buffer/window lifecycle
+events. Each window has an independent baseline. Disabling restores each
+presentation value still owned by Pencil exactly. If an external edit changes
+an owned value while Pencil is active, that value is preserved. Narrow windows
+contract safely, and repeated reconciliation does not compound margins.
 
-Window presentation is applied independently to every window displaying an
-enabled buffer, including late windows, and cleanup does not leak across
-buffers. Soft mode wraps visually near its configured width and does not change
-colorcolumn or unrelated settings; hard mode inserts real breaks via textwidth. Routine
-activation, detection, and suspension are quiet; notifications are for invalid
-configuration/commands, explicit failures, mapping conflicts, and attempts to
-enable autoformat outside hard mode. Test with the repository's isolated
-headless runner; optional parser-dependent checks may be skipped with a reason,
-but safety and fallback checks always run.
-
-*pencil-migration*
-MIGRATION AND ATTRIBUTION
-
-This is a clean Neovim redesign inspired by
-https://github.com/preservim/vim-pencil, not a drop-in Vim/Vimscript port.
-Use require("pencil").setup({...}) instead of g:pencil#..., the Lua API and
-unified :Pencil commands instead of Mapkey() or :DropPencil, and Lua filetype
-policies/classifiers. Use pencil.status() for statusline integration. Expect
-Neovim 0.10+ and exact ownership/restoration with conflict-safe mappings. Old
-options, commands, mappings, formatting quirks, and syntax groups are not
-promised compatible interfaces.
-
-The repository is distributed under the MIT License; see |pencil-license| and
-LICENSE. The existing notice is Copyright (c) 2026 Jaron Swab. The upstream
-project is inspiration only and endorsement is not implied.
+Pencil does not insert hard breaks, autoformat during insert, auto-enable by
+filetype, configure filetype widths, install mappings, manage concealment,
+classify protected regions, provide statusline integration, or preserve old
+commands/configuration compatibility.
 
 *pencil-license*
-LICENSE
+LICENSE AND ATTRIBUTION
 
-The complete license text is in LICENSE at the repository root. Release
-readiness is tested by the isolated tests/run.sh runner and CI on Neovim 0.10
-and current stable; this project does not add release automation.
+The complete license text is in LICENSE at the repository root. The repository
+uses the MIT License and retains Copyright (c) 2026 Jaron Swab. Pencil is
+inspired by https://github.com/preservim/vim-pencil without implying
+compatibility or endorsement.

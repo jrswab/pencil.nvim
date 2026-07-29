@@ -1,9 +1,8 @@
 pencil	pencil.txt	/*pencil*
+pencil.nvim	pencil.txt	/*pencil.nvim*
 pencil-api	pencil.txt	/*pencil-api*
 pencil-commands	pencil.txt	/*pencil-commands*
 pencil-configuration	pencil.txt	/*pencil-configuration*
 pencil-installation	pencil.txt	/*pencil-installation*
 pencil-license	pencil.txt	/*pencil-license*
-pencil-migration	pencil.txt	/*pencil-migration*
-pencil-status	pencil.txt	/*pencil-status*
-pencil.nvim	pencil.txt	/*pencil.nvim*
+pencil-safety	pencil.txt	/*pencil-safety*
